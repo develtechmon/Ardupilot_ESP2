@@ -1,4 +1,4 @@
-# ArduPilot on ESP32 DevKit — Comprehensive User Guide
+# ArduPilot on ESP32 DevKit 
 
 Oct 7, 2026 · @lukas
 
