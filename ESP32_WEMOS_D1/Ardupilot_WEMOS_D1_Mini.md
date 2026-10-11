@@ -4,7 +4,7 @@ Oct 11, 2026 · @lukas
 
 The MINI32 carries the same ESP32-WROOM-32 chip and 4 MB flash as the DevKit V1 and breaks out every GPIO the `esp32lukas` board uses, so the same firmware runs on it; only the wiring, USB driver and power change.
 
-> **Status and safety.** ArduPilot on ESP32 is experimental: ArduPilot's own docs say so, and no commercial ESP32 autopilot exists. Keep props **off** until Part 13, fly tethered first, and never near people. Pin numbers and ports were checked against ArduPilot master's `esp32buzz` board file (October 2026) and the MINI32 pinout.
+> **Status and safety.** ArduPilot on ESP32 is experimental: ArduPilot's own docs say so, and no commercial ESP32 autopilot exists. Keep props **off** until Part 13, fly tethered first, and never near people. Tested with ArduPilot master (ArduCopter V4.8.0-dev, commit 81ff4d6a, 6 October 2026) and ESP-IDF 5.3. Pin numbers and ports were checked against ArduPilot master's `esp32buzz` board file (October 2026) and the MINI32 pinout.
 
 ## How to use this guide
 
@@ -274,7 +274,11 @@ Without this fix the drone arms, but `ch1out` to `ch4out` stay at **1150** (`MOT
 
 From ArduPilot 4.7 onward (4.7.1 and master included), the motor library locks the motors at ground idle after arming and waits for a pre-takeoff check to release them. That check (`ArduCopter/takeoff_check.cpp`) sits inside `#if HAL_WITH_ESC_TELEM`, and every ESP32 board has ESC telemetry off, so on ESP32 it compiles to an empty function and the lock is never released. It's like a parking brake that only a sensor you don't have can release. The bug is reported upstream as [PR #34070](https://github.com/ArduPilot/ardupilot/pull/34070) and [PR #34132](https://github.com/ArduPilot/ardupilot/pull/34132), not merged as of October 2026.
 
-This step keeps the ESC-telemetry parts conditional and always runs the release. Running it again does nothing.
+The fix keeps the ESC-telemetry parts conditional and always runs the release. Apply it **one** of two ways; both compile to the same fix in `takeoff_check.cpp`.
+
+**Tested with:** ArduPilot master, `ArduCopter V4.8.0-dev`, commit `81ff4d6a` (6 October 2026), ESP-IDF 5.3. Copter-4.7.1's `takeoff_check.cpp` is identical, so both methods work there too. Check your own clone with `grep THISFIRMWARE ArduCopter/version.h` and `git log -1 --format="%h %ad" --date=short`.
+
+**Method A: script** (no download needed; running it again does nothing).
 
 ```bash
 cd ~/ardupilot_esp32_build/ardupilot
@@ -302,6 +306,73 @@ grep -n "#if\|#else\|no ESC telemetry" ArduCopter/takeoff_check.cpp
 ```
 
 **Check:** the grep shows `#if FRAME_CONFIG != HELI_FRAME`, two `#if HAL_WITH_ESC_TELEM` lines, one `#else` and `// no ESC telemetry: nothing to check`. If the script stops with `file differs from expected`, ArduPilot has probably merged its own fix. Confirm the file no longer starts with `#if HAL_WITH_ESC_TELEM && FRAME_CONFIG != HELI_FRAME`, then skip this step.
+
+**Method B: patch file** (`takeoff_check_esp32_fix.patch`). Save the patch file to your Windows **Downloads** folder, then in Ubuntu:
+
+```bash
+cd ~/ardupilot_esp32_build/ardupilot
+
+# copy the patch from Windows Downloads (change YOURNAME to your Windows user name)
+cp /mnt/c/Users/YOURNAME/Downloads/takeoff_check_esp32_fix.patch .
+
+# check it applies, then apply it
+git apply --check takeoff_check_esp32_fix.patch && git apply takeoff_check_esp32_fix.patch
+
+# rebuild
+get_idf
+
+./waf copter
+
+# verify the fix is inside the firmware (must NOT be 00000005)
+nm -C -S build/esp32lukas/esp-idf_build/ardupilot.elf | grep " Copter::takeoff_check()"
+```
+
+**Check:** `git apply --check` prints nothing (no news is good news), and the `nm` line shows a size other than `00000005`. If `--check` says `patch does not apply`, run `git apply --check -R takeoff_check_esp32_fix.patch`: no output there means the fix is already in, so skip it. Any other error means the file has changed upstream; use Method A, which stops with a clear message.
+
+No patch file? Create it with `nano takeoff_check_esp32_fix.patch`, paste the contents below, save, and add `--ignore-whitespace` to both `git apply` commands (copy-paste can strip the trailing spaces a patch relies on):
+
+```diff
+diff --git a/ArduCopter/takeoff_check.cpp b/ArduCopter/takeoff_check.cpp
+--- a/ArduCopter/takeoff_check.cpp
++++ b/ArduCopter/takeoff_check.cpp
+@@ -5,15 +5,19 @@
+ //
+ 
+ // detects if the vehicle should be allowed to takeoff or not and sets the motors.blocked flag
++// FIX: only the ESC-telemetry parts are conditional, so boards without ESC telemetry
++// (all ESP32 boards) still clear the spool-up block (see ArduPilot PR #34070 / #34132)
+ void Copter::takeoff_check()
+ {
+-#if HAL_WITH_ESC_TELEM && FRAME_CONFIG != HELI_FRAME
++#if FRAME_CONFIG != HELI_FRAME
+     // if motors have become unblocked return immediately
+     // this ensures the motors can only be blocked immediately after arming
+     uint32_t now_ms = AP_HAL::millis();
+     if (!motors->get_spoolup_block()) {
+         takeoff_check_warning_ms = now_ms;
++#if HAL_WITH_ESC_TELEM
+         takeoff_check_state.warning_ms = now_ms;
++#endif
+         return;
+     }
+ 
+@@ -25,8 +29,13 @@ void Copter::takeoff_check()
+         return;
+     }
+ 
++#if HAL_WITH_ESC_TELEM
+     // Run the common motor checks (called early so it can clear its warning timer when disarmed)
+     const bool motor_check_passed = motors_takeoff_check(g2.takeoff_rpm_min, g2.takeoff_rpm_max);
++#else
++    // no ESC telemetry: nothing to check
++    const bool motor_check_passed = true;
++#endif
+ 
+     // Check system load
+     float avg_load, peak_load;
+```
+
+After either method, run the Part 4 build and checks before flashing.
 
 **Older branch instead?** Copter 4.6.3 doesn't have this bug, because there the lock is only set inside the ESC-telemetry check. But 4.6 describes ESP32 boards in the old `boards/*.h` header format, so this guide's `hwdef.dat`, `defaults.parm` and 3.2 don't apply to it. Stay on master or 4.7.1 with this fix.
 
