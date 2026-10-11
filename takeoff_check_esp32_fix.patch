@@ -1,0 +1,39 @@
+diff --git a/ArduCopter/takeoff_check.cpp b/ArduCopter/takeoff_check.cpp
+index ce20f56..3780696 100644
+--- a/ArduCopter/takeoff_check.cpp
++++ b/ArduCopter/takeoff_check.cpp
+@@ -5,15 +5,19 @@
+ //
+ 
+ // detects if the vehicle should be allowed to takeoff or not and sets the motors.blocked flag
++// FIX: only the ESC-telemetry parts are conditional, so boards without ESC telemetry
++// (all ESP32 boards) still clear the spool-up block (see ArduPilot PR #34070 / #34132)
+ void Copter::takeoff_check()
+ {
+-#if HAL_WITH_ESC_TELEM && FRAME_CONFIG != HELI_FRAME
++#if FRAME_CONFIG != HELI_FRAME
+     // if motors have become unblocked return immediately
+     // this ensures the motors can only be blocked immediately after arming
+     uint32_t now_ms = AP_HAL::millis();
+     if (!motors->get_spoolup_block()) {
+         takeoff_check_warning_ms = now_ms;
++#if HAL_WITH_ESC_TELEM
+         takeoff_check_state.warning_ms = now_ms;
++#endif
+         return;
+     }
+ 
+@@ -25,8 +29,13 @@ void Copter::takeoff_check()
+         return;
+     }
+ 
++#if HAL_WITH_ESC_TELEM
+     // Run the common motor checks (called early so it can clear its warning timer when disarmed)
+     const bool motor_check_passed = motors_takeoff_check(g2.takeoff_rpm_min, g2.takeoff_rpm_max);
++#else
++    // no ESC telemetry: nothing to check
++    const bool motor_check_passed = true;
++#endif
+ 
+     // Check system load
+     float avg_load, peak_load;
