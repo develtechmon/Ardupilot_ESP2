@@ -1,6 +1,6 @@
 # ArduPilot on WEMOS D1 Mini ESP32 (MINI32) — Complete Build Guide
 
-Oct 9, 2026 · @lukas
+Oct 11, 2026 · @lukas
 
 The MINI32 carries the same ESP32-WROOM-32 chip and 4 MB flash as the DevKit V1 and breaks out every GPIO the `esp32lukas` board uses, so the same firmware runs on it; only the wiring, USB driver and power change.
 
@@ -14,7 +14,7 @@ Work through the Parts **in order**; each step ends with a **Check**, and you do
 
 1. Check the board is a classic ESP32 with 4 MB flash (Part 1).
 2. Set up Ubuntu and ESP-IDF once (Part 2).
-3. Create the board file, **turn optical flow back on**, and write `defaults.parm` (Part 3).
+3. Create the board file, **turn optical flow back on, fix the throttle bug**, and write `defaults.parm` (Part 3).
 4. Build the firmware and confirm flow and the compass are inside it (Part 4).
 5. Flash the bare board and read its boot log (Part 5).
 6. Connect Mission Planner over USB and prove the board is stable (Part 6).
@@ -36,7 +36,7 @@ The MINI32 is the same chip in a smaller body. Think of it as moving house with 
 | Buttons | EN + BOOT | Usually **RST only** | Manual flash mode uses a jumper on IO0 (Part 5) |
 | Power in | VIN pin | `5V`/`VCC` pin, tied to USB 5V | Same rule: USB or battery, not both (Part 8) |
 
-**One extra step this build needs:** ArduPilot's ESP32 code switches optical flow off for every ESP32 board, so the MTF-01 only works after the two changes in 3.2.
+**Two extra fixes this build needs:** ArduPilot's ESP32 code switches optical flow off for every ESP32 board, so the MTF-01 only works after the two changes in 3.2. And from ArduPilot 4.7 onward, a bug locks the motors at idle on every ESP32 board, so the throttle stick does nothing until you apply 3.2b.
 
 **Already set up the build environment for the DevKit?** Skip Part 2, keep your board folder, run 3.2 (older builds had optical flow switched off), and redo Part 4. Then flash the new files from `build/esp32lukas/esp-idf_build/` (Part 5), then continue from Part 6.
 
@@ -268,6 +268,43 @@ grep -n "AP_OPTICALFLOW_ENABLED" $H
 - **After a `git pull`:** this edits an ArduPilot file, so run `git stash` before the pull and `git stash pop` after it, then run this block again.
 - **Tested on ArduPilot master (October 2026):** with both changes the firmware contains the MTF-01's MAVLink flow driver, EKF3 flow fusion and the `FLOW_` parameters, with 33% of the firmware space still free. The ESP32 port turned flow off on purpose, probably to save space and CPU, so watch for `PreArm: Main loop slow` once the MTF-01 streams (11.0).
 
+### 3.2b Fix the "motors stuck at idle" bug
+
+Without this fix the drone arms, but `ch1out` to `ch4out` stay at **1150** (`MOT_SPIN_MIN`) and the throttle stick does nothing. Motor Test still works, because it skips this logic.
+
+From ArduPilot 4.7 onward (4.7.1 and master included), the motor library locks the motors at ground idle after arming and waits for a pre-takeoff check to release them. That check (`ArduCopter/takeoff_check.cpp`) sits inside `#if HAL_WITH_ESC_TELEM`, and every ESP32 board has ESC telemetry off, so on ESP32 it compiles to an empty function and the lock is never released. It's like a parking brake that only a sensor you don't have can release. The bug is reported upstream as [PR #34070](https://github.com/ArduPilot/ardupilot/pull/34070) and [PR #34132](https://github.com/ArduPilot/ardupilot/pull/34132), not merged as of October 2026.
+
+This step keeps the ESC-telemetry parts conditional and always runs the release. Running it again does nothing.
+
+```bash
+cd ~/ardupilot_esp32_build/ardupilot
+
+# edit takeoff_check.cpp (prints "fixed", or "already fixed - nothing to do")
+python3 - <<'EOF'
+p = "ArduCopter/takeoff_check.cpp"
+s = open(p).read()
+if "no ESC telemetry: nothing to check" in s:
+    print("already fixed - nothing to do")
+else:
+    a = "#if HAL_WITH_ESC_TELEM && FRAME_CONFIG != HELI_FRAME"
+    b = "        takeoff_check_state.warning_ms = now_ms;\n"
+    c = "    const bool motor_check_passed = motors_takeoff_check(g2.takeoff_rpm_min, g2.takeoff_rpm_max);\n"
+    assert s.count(a) == 1 and s.count(b) == 1 and s.count(c) == 1, "file differs from expected - stop and check"
+    s = s.replace(a, "#if FRAME_CONFIG != HELI_FRAME")
+    s = s.replace(b, "#if HAL_WITH_ESC_TELEM\n" + b + "#endif\n")
+    s = s.replace(c, "#if HAL_WITH_ESC_TELEM\n" + c + "#else\n    // no ESC telemetry: nothing to check\n    const bool motor_check_passed = true;\n#endif\n")
+    open(p, "w").write(s)
+    print("fixed")
+EOF
+
+# check the result
+grep -n "#if\|#else\|no ESC telemetry" ArduCopter/takeoff_check.cpp
+```
+
+**Check:** the grep shows `#if FRAME_CONFIG != HELI_FRAME`, two `#if HAL_WITH_ESC_TELEM` lines, one `#else` and `// no ESC telemetry: nothing to check`. If the script stops with `file differs from expected`, ArduPilot has probably merged its own fix. Confirm the file no longer starts with `#if HAL_WITH_ESC_TELEM && FRAME_CONFIG != HELI_FRAME`, then skip this step.
+
+**Older branch instead?** Copter 4.6.3 doesn't have this bug, because there the lock is only set inside the ESC-telemetry check. But 4.6 describes ESP32 boards in the old `boards/*.h` header format, so this guide's `hwdef.dat`, `defaults.parm` and 3.2 don't apply to it. Stay on master or 4.7.1 with this fix.
+
 ### 3.3 What the important lines mean
 
 Leave these as they are; Part 7 wires the MINI32 to match them.
@@ -321,8 +358,11 @@ FLTMODE4 2
 FLTMODE5 2
 FLTMODE6 5
 
-# --- channel 6 (SwA) = motor emergency stop
-RC6_OPTION 31
+# --- channel 6 (SwA) = arm (up) / disarm (down); after boot flip it down, then up
+RC6_OPTION 153
+
+# --- never start ESC calibration from ArduPilot: it hangs the ESP32 (12.6)
+ESC_CALIBRATION 9
 
 # --- logging: the MINI32 has no SD card (set 1 if you fit one, 8.6)
 LOG_BACKEND_TYPE 0
@@ -420,7 +460,7 @@ get_idf                                    # load the ESP32 tools
 
 The files you flash are in `build/esp32lukas/esp-idf_build/`: `bootloader/bootloader.bin`, `partition_table/partition-table.bin`, `ardupilot.bin`, and `flash_args` (the address for each file, so you never type addresses yourself).
 
-**Confirm the compass, optical flow and defaults made it into the build (before every flash that follows a board-file change):**
+**Confirm the compass, optical flow, the throttle fix and defaults made it into the build (before every flash that follows a board-file change):**
 
 ```bash
 cd ~/ardupilot_esp32_build/ardupilot
@@ -432,9 +472,11 @@ nm -C build/esp32lukas/esp-idf_build/ardupilot.elf | grep -c AP_OpticalFlow_MAV 
 grep -c "defaults.parm" build/esp32lukas/ap_romfs_embedded.h     # 1: defaults file embedded
 
 grep -o "HAL_PARAM_DEFAULTS_PATH[^ ]*" -m1 build/esp32lukas/compile_commands.json   # firmware told to load it
+
+nm -C -S build/esp32lukas/esp-idf_build/ardupilot.elf | grep " Copter::takeoff_check()"   # 2nd column NOT 00000005: throttle fix (3.2b) included
 ```
 
-**Check:** the first three print a number above 0 (a 0 on the second means flow is still off: run 3.2 again, then configure and build again, and don't flash yet), and the fourth prints `HAL_PARAM_DEFAULTS_PATH=\"@ROMFS/defaults.parm\"`.
+**Check:** the first three print a number above 0 (a 0 on the second means flow is still off: run 3.2 again, then configure and build again, and don't flash yet). The fourth prints `HAL_PARAM_DEFAULTS_PATH=\"@ROMFS/defaults.parm\"`. On the last line, the second column (the function's size) must **not** be `00000005`: that size is an empty function, so 3.2b didn't run. Do it, then build again. A fixed build shows something like `000000a4`.
 
 ## Part 5: Flash the MINI32
 
@@ -906,7 +948,7 @@ This sketch replaces ArduPilot, so **reflash** (Part 5) afterwards, then unplug 
 
 - **Bind:** hold the FS-A8S bind button while powering it, then switch on the FS-i6 holding **BIND KEY**. Power-cycle both when the receiver LED goes solid.
 - **PPM output:** if IO4 later sees no signal, set **System → RX setup → Output mode → PPM** on the FS-i6.
-- **Switches:** **Functions setup → Aux. channels**: Channel 5 = **SwC** (flight modes), Channel 6 = **SwA** (emergency stop).
+- **Switches:** **Functions setup → Aux. channels**: Channel 5 = **SwC** (flight modes), Channel 6 = **SwA** (arm / disarm).
 
 **Don't skip the channel 5 step.** On the FS-i6, channel 5 starts on the **VrA knob**, not a switch, so flipping SwC does nothing until you change it: hold **OK** → **Functions setup → Aux. channels → Channel 5 → SwC**, then hold **Cancel** to save. SwC is the only 3-position switch, and a 3-position switch lands in ArduPilot's mode slots 1, 4 and 6 (about 1000 / 1500 / 2000 µs), which is why `defaults.parm` sets `FLTMODE1`, `FLTMODE4` and `FLTMODE6`.
 
@@ -1012,7 +1054,7 @@ The ESP32 port has a brushed output mode, but its behaviour at 16 kHz hasn't bee
 | `FLTMODE4` | 2 | SwC middle: **AltHold** |
 | `FLTMODE6` | 5 | SwC down: **Loiter** (needs optical flow) |
 | `FLTMODE2`, `3`, `5` | 0, 0, 2 | Safe fillers for in-between switch values |
-| `RC6_OPTION` | 31 | SwA = **motor emergency stop** |
+| `RC6_OPTION` | 153 | SwA = **arm (up) / disarm (down)** |
 
 ### 11.3 Failsafes
 
@@ -1106,46 +1148,119 @@ In **Setup → Mandatory Hardware**, over USB, **props off**. Reboot after each.
 | 12.1 Accelerometer | **Calibrate Accel** (six positions), then **Calibrate Level** with the frame level | HUD level when the frame is level |
 | 12.2 Compass | **Start**, rotate the frame slowly through every orientation, outdoors, away from steel and cables | HUD heading changes correctly as you turn |
 | 12.3 Radio | **Calibrate Radio**: sticks to every corner, every switch through every position, **Click when Done** | Right stick = roll/pitch (stick up shows pitch bar down, which is correct), left stick = throttle/yaw, SwC = ch5 and mode changes, SwA = ch6 |
-| 12.4 ESCs (brushless only) | `ESC_CALIBRATION = 3`, full steps in 12.6 | Resets itself; all motors start together. BLHeli\_S ESCs skip this |
+| 12.4 ESCs (brushless only) | Calibration sketch, **never** the Calibrate ESCs button (12.6) | All 4 motors speed up together in the sketch's test ramp |
 | 12.5 Flow sensor | Hold 30–50 cm over a textured floor, **Data → Status** | `rangefinder1` tracks height, `opt_qua` well above 0, `opt_m_x`/`opt_m_y` change as you move |
 
 **Test the radio failsafe:** with the receiver powered, switch the transmitter **off**. **Check:** channel 3 drops to about 900 and Mission Planner reports a radio failsafe. If it stays at its last value, redo 9.2.
 
 ### 12.6 ESC calibration in detail (brushless only)
 
-ArduPilot runs the calibration itself, but its code (`ArduCopter/esc_calibration.cpp`) checks the radio first: it waits **at most 2 seconds** after boot for the receiver, and if the radio checks fail it **silently skips** calibration and resets `ESC_CALIBRATION` to 0. So the receiver must already be linked when the board powers up.
+**Don't use ArduPilot's ESC calibration on the ESP32.** The **Calibrate ESCs** button saves `ESC_CALIBRATION = 3`. At the next power-up, Copter calibrates in the middle of startup and never returns. The ESP32 port can't save the "done" flag until startup finishes, because its storage, IO and UART threads wait for that (`AP_HAL_ESP32/Scheduler.cpp`). So every power-up re-enters calibration and the board stops talking to Mission Planner. The throttle-high method can't work either, because the receiver isn't read that early. `defaults.parm` sets `ESC_CALIBRATION 9` (disabled), but the button overwrites it, so never press it.
 
-**Before you start:**
+**Board stopped responding after pressing it?** Wipe only the parameter storage (`0x310000`, 256 KB, this build's `storage` partition). The firmware stays. Then redo the calibrations in this Part:
 
-- [ ] Props off
-- [ ] Radio calibrated (12.3) and the FS-A8S LED solid with the FS-i6 on
-- [ ] MINI32 powered from the battery's 5V (BEC), **USB unplugged**, so board and ESCs start together
-- [ ] `MOT_PWM_TYPE = 0`, `MOT_PWM_MIN = 1000`, `MOT_PWM_MAX = 2000`
+```bash
+get_idf
 
-**Method A, semi-automatic (easiest; the MINI32 has no LEDs or buzzer to watch):**
-
-```
-1. Mission Planner (USB): ESC_CALIBRATION = 3 -> Write Params
-2. Unplug USB and battery                   # board fully off
-3. FS-i6 ON, throttle stick DOWN
-4. Plug in the battery                      # board sends max throttle ~5 s, then min
-5. Listen: tone + 2 beeps (max learned) -> beeps per cell -> long beep (min learned)
-6. Unplug the battery                       # ESC_CALIBRATION resets itself to 0
+esptool.py --chip esp32 -p /dev/ttyUSB0 erase_region 0x310000 0x40000
 ```
 
-**Method B, throttle stick:**
+`Failed to connect`: hold IO0 to GND while plugging in USB (Part 5).
 
-```
-1. FS-i6 ON, throttle stick FULL UP          # must read 95% or more after radio calibration
-2. Plug in the battery                       # board notes high throttle, then waits
-3. Unplug the battery, stick still UP
-4. Plug it in again                          # your stick now goes straight to the ESCs
-5. Tone, 1 beep per cell, 2 beeps            # max captured
-6. Stick FULL DOWN -> long tone              # min captured
-7. Nudge throttle: all 4 start together -> stick down -> unplug battery
+**Calibrate with this sketch instead.** Arduino IDE, ESP32 core 3.x, board **ESP32 Dev Module**, Serial Monitor 115200 with line ending **Newline**. It drives all 4 motor pins at once and tells you when to plug in the battery.
+
+```cpp
+// GUIDED ESC CALIBRATION for 4 ESCs - no ArduPilot. PROPS OFF.
+// To start over: unplug the battery, press the ESP32's EN/RST button.
+
+const int ESC_PINS[4] = {25, 27, 33, 32};   // motor 1-4 pins from the hwdef
+
+void setPulse(int us) {
+  for (int i = 0; i < 4; i++) {
+    ledcWrite(ESC_PINS[i], (uint32_t)us * 65535 / 20000);   // 50 Hz, pulse width in us
+  }
+  Serial.printf("   [signal to ESCs = %d us]\n", us);
+}
+
+void waitEnter() {
+  while (Serial.available()) Serial.read();               // clear old input
+  while (!Serial.available()) delay(10);                  // wait for Enter
+  while (Serial.available()) Serial.read();
+}
+
+void setup() {
+  Serial.begin(115200);
+  delay(1000);
+  for (int i = 0; i < 4; i++) ledcAttach(ESC_PINS[i], 50, 16);
+  setPulse(1000);                                         // safe start
+
+  Serial.println("\n=========== ESC CALIBRATION ===========");
+  Serial.println("STEP 1: Check ALL of these:");
+  Serial.println("  - PROPS OFF");
+  Serial.println("  - Battery UNPLUGGED");
+  Serial.println("  - ESC signal wires on IO25, IO27, IO33, IO32");
+  Serial.println("  - ESC black/brown signal ground wires on ESP32 GND");
+  Serial.println("  - ESC red wires NOT connected (ESP32 runs from USB)");
+  Serial.println(">> Press Enter when ready.");
+  waitEnter();
+
+  setPulse(2000);                                         // full throttle BEFORE the ESCs get power
+  Serial.println("\nSTEP 2: Sending FULL throttle now.");
+  Serial.println(">> PLUG IN THE BATTERY NOW.");
+  Serial.println("   You will hear: startup tune, then 'beep-beep'.");
+  Serial.println(">> Press Enter AS SOON AS you hear 'beep-beep' (within 2-3 seconds!).");
+  waitEnter();
+
+  setPulse(1000);                                         // minimum throttle -> ESC stores the range
+  Serial.println("\nSTEP 3: Sending MINIMUM throttle now.");
+  Serial.println("   You should hear: 3 beeps (3S battery), then 1 long beep = CALIBRATED.");
+  Serial.println("   If you hear a repeating series of DIFFERENT tones instead, you were too slow:");
+  Serial.println("   unplug the battery, press EN/RST, and start again.");
+  Serial.println(">> Press Enter after the long beep.");
+  waitEnter();
+
+  Serial.println("\nSTEP 4: Test. Motors WILL SPIN (props must be OFF).");
+  Serial.println(">> Press Enter to start the test.");
+  waitEnter();
+  int steps[] = {1100, 1200, 1300, 1400, 1500};
+  for (int i = 0; i < 5; i++) {
+    setPulse(steps[i]);
+    Serial.println("   all 4 motors should be spinning, and getting faster");
+    delay(2000);
+  }
+  setPulse(1000);                                         // stop motors
+
+  Serial.println("\nSTEP 5: DONE. Motors stopped.");
+  Serial.println(">> UNPLUG THE BATTERY.");
+  Serial.println("   The ESCs keep this calibration. You can flash ArduPilot back now.");
+}
+
+void loop() {
+  // nothing - the signal stays at 1000 us (motors stopped)
+}
 ```
 
-**Check:** power up normally and run **Motor Test** at 5–10%: all four start at the same percentage. Brushed motors skip this (ArduPilot does too). A DIY ESC only calibrates if its firmware learns its range at power-up; otherwise set `MOT_PWM_MIN`/`MAX` to the range it expects. Source: [ArduPilot ESC Calibration](https://ardupilot.org/copter/docs/esc-calibration.html).
+| Serial Monitor says | You do | You hear |
+| --- | --- | --- |
+| STEP 1 | Props off, battery unplugged, wires as listed; press Enter | — |
+| STEP 2 | Plug in the battery; press Enter as soon as you hear "beep-beep" | Startup tune, then beep-beep |
+| STEP 3 | Press Enter after the long beep | 3 beeps (3S), then 1 long beep |
+| STEP 4 | Press Enter; the motors ramp 1100 → 1500 µs over 10 s | All 4 motors speed up together |
+| STEP 5 | Unplug the battery | — |
+
+The sketch's 1000–2000 µs matches `MOT_PWM_MIN 1000` / `MOT_PWM_MAX 2000`, so the ESCs learn the same range ArduPilot sends. Click into the Serial Monitor's input box before STEP 2, so Enter is one keypress.
+
+**ESC beep codes** (generic plane-style 40A ESCs, Hobbywing-style firmware):
+
+| You hear | Meaning | Fix |
+| --- | --- | --- |
+| One beep about every 2 s | No signal | Signal wire on the right pin; ESC signal ground to ESP32 GND |
+| Fast continuous beeping | Throttle not at minimum | Calibrate (above) |
+| Double beeps repeating | Battery voltage out of range | Fully charged pack |
+
+**`RC_SPEED`** (default 490, capped to 400 Hz by the ESP32 driver): plane-style ESCs are built for a 50 Hz receiver signal. Keep the default if Motor Test follows. If a motor stutters or ignores higher %, set `RC_SPEED = 50` and reboot, then step up 100 → 200 → 300 and keep the highest value that still responds.
+
+**Check:** after flashing ArduPilot back, arm with SwA (props off) and push the throttle. In **Data → Status**, `ch1out` to `ch4out` climb together from about 1100 toward 1900. If they stay at 1150, 3.2b is missing; if they stay at 1000, the board isn't armed.
 
 ### 12.7 Flight-mode switch check
 
@@ -1173,7 +1288,7 @@ Work through these in order; each line rules out a cause before the next depends
 - [ ] **Motor Test** (Setup → Optional Hardware): test A = front right, B = rear right, C = rear left, D = front left; each spins the right way (brushless: swap two motor wires; brushed: swap the motor's two wires)
 - [ ] Arm in Stabilize (throttle down, rudder right \~2 s): motors idle
 - [ ] Tilt the frame by hand: the low-side motors speed up
-- [ ] SwA emergency stop cuts the motors instantly
+- [ ] SwA down disarms and stops the motors instantly (to arm: flip SwA down, then up)
 - [ ] Disarm (throttle down, rudder left \~2 s): motors stop
 
 If arming is refused, read the `PreArm:` message and fix that cause. Don't disable `ARMING_CHECK`. **Props on** only when every line passes: front-right and rear-left take counter-clockwise props, front-left and rear-right clockwise.
@@ -1246,6 +1361,11 @@ Find your message, then apply the fix. When asking for help, include the **first
 | Resets when throttle goes up | 5V brownout | Capacitor and a stronger 5V source (8.1) |
 | `No MAVLink Heartbeat Packets` | Port held by another program, AUTO baud, reset on connect, or board restarting | 6.1b checklist |
 | Board reboots by itself | Read the rst: code at the top of the boot log | Part 5 reset-reason table |
+| Armed, motors idle, throttle stick does nothing; Motor Test works; ch1out–ch4out stay at 1150 | ESP32 bug: the spool-up lock is never released | 3.2b, rebuild, check the takeoff\_check size (Part 4), flash |
+| ch1out–ch4out stay at 1000 while you think it's armed | Not armed (1000 = disarmed); Motor Test arms the motors itself, so it still works | HUD must say ARMED; flip SwA down, then up; read the Arm:/PreArm: message |
+| SwA does not arm | ch6in not above 1800 / below 1200, switch already up at boot, or a pre-arm check failing | Endpoints 100% on the radio; flip down, then up; fix the reported PreArm |
+| Board never answers Mission Planner after Calibrate ESCs | ESC calibration hangs at every power-up on ESP32 | erase\_region 0x310000 0x40000, redo calibrations, use the sketch (12.6) |
+| ESC beeps once every 2 s and never arms | No signal reaching the ESC | Signal wire on the right pin; ESC signal ground to ESP32 GND |
 
 ### Sensors, radio, motors and arming
 
@@ -1285,21 +1405,23 @@ get_idf                                                   # load the tools
 ESPPORT=/dev/ttyUSB0 ESPBAUD=921600 ./waf copter --upload  # build and flash (ttyACM0 for CH9102)
 ```
 
-**Before flashing a board-file change**, confirm flow is in: `nm -C build/esp32lukas/esp-idf_build/ardupilot.elf | grep -c AP_OpticalFlow_MAV` must print more than 0.
+**Before flashing a board-file change**, confirm flow and the throttle fix are in: `nm -C build/esp32lukas/esp-idf_build/ardupilot.elf | grep -c AP_OpticalFlow_MAV` must print more than 0, and `nm -C -S build/esp32lukas/esp-idf_build/ardupilot.elf | grep " Copter::takeoff_check()"` must not show the size `00000005`.
 
 **Updating ArduPilot** (keeps the 3.2 change):
 
 ```bash
 cd ~/ardupilot_esp32_build/ardupilot
 
-git stash                                   # set aside the esp32.h change
+git stash                                   # set aside the esp32.h and takeoff_check.cpp changes
 
 git pull && git submodule update --init --recursive
 
 git stash pop                               # put it back
 
-# then run the 3.2 block again, configure, build, and the Part 4 check
+# then run the 3.2 and 3.2b blocks again, configure, build, and the Part 4 check
 ```
+
+If `git stash pop` reports a conflict in `ArduCopter/takeoff_check.cpp`, ArduPilot has merged its own fix. Keep its version with `git checkout HEAD -- ArduCopter/takeoff_check.cpp`, then `git stash drop`, and skip 3.2b.
 
 **WSL USB cycle** (PowerShell):
 
@@ -1342,7 +1464,7 @@ usbipd unbind --busid 1-1              # Admin; stop sharing with WSL
 | --- | --- |
 | Loop | `SCHED_LOOP_RATE 150` (set first) |
 | Frame | `FRAME_CLASS 1`, `FRAME_TYPE 1`, `MOT_PWM_TYPE 0` (brushed: `3` + `RC_SPEED 16000`) |
-| Modes | `FLTMODE_CH 5`, `FLTMODE1 0`, `FLTMODE4 2`, `FLTMODE6 5`, `RC6_OPTION 31` |
+| Modes | `FLTMODE_CH 5`, `FLTMODE1 0`, `FLTMODE4 2`, `FLTMODE6 5`, `RC6_OPTION 153` |
 | Failsafe | `FS_THR_ENABLE 3`, `FS_THR_VALUE 975`, `FS_GCS_ENABLE 0`, `FS_EKF_ACTION 1` |
 | Flow | `SERIAL3_PROTOCOL 1`, `SERIAL3_BAUD 115`, `SERIAL3_OPTIONS 0`, `FLOW_TYPE 5`, `RNGFND1_TYPE 10`, `RNGFND1_MAX 8`, `RNGFND1_MIN 0.01` |
 | EKF | `EK3_SRC1_POSXY 0`, `EK3_SRC1_VELXY 5`, `EK3_SRC1_POSZ 2`, `EK3_SRC1_VELZ 0`, `EK3_SRC1_YAW 1` |
@@ -1350,7 +1472,7 @@ usbipd unbind --busid 1-1              # Admin; stop sharing with WSL
 | Logging | `LOG_BACKEND_TYPE 0` without SD card |
 | Bench, no MTF-01 | `EK3_SRC1_POSZ 1, EK3_SRC1_VELXY 0, RNGFND1_TYPE 0, FLOW_TYPE 0` |
 
-**Order of work:** check board → environment → board file + flow fix → build (check flow is inside) → flash bare board → stability test → wire one device at a time → peripherals → Mission Planner over USB → parameters → calibration → bench test → props on → tethered hover.
+**Order of work:** check board → environment → board file + flow fix + throttle fix → build (check both are inside) → flash bare board → stability test → wire one device at a time → peripherals → Mission Planner over USB → parameters → calibration → bench test → props on → tethered hover.
 
 ## Sources
 
@@ -1366,3 +1488,7 @@ usbipd unbind --busid 1-1              # Admin; stop sharing with WSL
 - [ESC Calibration – ArduPilot Copter docs](https://ardupilot.org/copter/docs/esc-calibration.html)
 - MicoAir MTF-01 user guide, Step 5 (indoor EKF3 settings)
 - ArduPilot source (master, October 2026): `libraries/AP_HAL/board/esp32.h` (optical flow off), `ArduCopter/esc_calibration.cpp`, `AP_SerialManager.cpp` (SERIAL OPTIONS bit 10 check)
+- [ArduPilot PR #34070: clear takeoff spool-up block on boards without ESC telemetry](https://github.com/ArduPilot/ardupilot/pull/34070)
+- [ArduPilot PR #34132: keep CPU takeoff check without ESC telemetry](https://github.com/ArduPilot/ardupilot/pull/34132)
+- ArduPilot source checked October 2026: `ArduCopter/takeoff_check.cpp` and `AP_MotorsMulticopter.cpp` (master and Copter-4.7.1 have the bug; Copter-4.6.3 does not), `AP_HAL_ESP32/Scheduler.cpp` (threads wait for startup), `ArduCopter/motor_test.cpp` (Motor Test arms the motors itself)
+- [ArduPilot docs: PWM, OneShot and OneShot125 ESCs (RC\_SPEED)](https://ardupilot.org/copter/docs/common-brushless-escs.html)
