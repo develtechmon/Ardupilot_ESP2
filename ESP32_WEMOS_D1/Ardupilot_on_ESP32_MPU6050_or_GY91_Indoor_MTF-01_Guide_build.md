@@ -1,12 +1,12 @@
 # ArduPilot on ESP32 + MPU6050 or GY-91 — Indoor MTF-01 Build Guide
 
-Oct 12, 2026 · @lukas
+Oct 13, 2026 · @lukas
 
 This guide builds an indoor ArduCopter flight controller from a WEMOS D1 Mini ESP32 (MINI32), a MicoAir MTF-01 optical-flow and range sensor, and one of two IMU options on I2C: A, an MPU6050 (GY-521), or B, a GY-91, which adds a BMP280 barometer. One firmware runs both. It keeps every fix found on the earlier GY-91 (SPI) build, and adds a noise test so you can prove the IMU is good before it flies.
 
 ## At a glance
 
-> **Status and safety.** ArduPilot on ESP32 is experimental. Keep props **off** until Part 8, fly tethered first, and never near people. Tested with ArduPilot master (`ArduCopter V4.8.0-dev`, commit `81ff4d6a`, 6 October 2026) and ESP-IDF 5.3: the `esp32lukas6050` board in this guide was built from that source, and every parameter in its `defaults.parm` was checked against ArduCopter's parameter list. It has not been flown on hardware yet; Part 2 and Part 8 are how you prove it.
+> **Status and safety.** ArduPilot on ESP32 is experimental. Keep props **off** until Part 8, fly tethered first, and never near people. Tested with ArduPilot master (`ArduCopter V4.8.0-dev`, commit `81ff4d6a`, 6 October 2026) and ESP-IDF 5.3: the `esp32lukas6050` board in this guide was built from that source, and every parameter in its `defaults.parm` was checked against ArduCopter's parameter list. Bench-tested on a WEMOS MINI32 with a GY-91 wired with four wires (VIN, GND, SDA, SCL): Mission Planner connects, parameters load quickly, the HUD follows the IMU, and ArduPilot finds the BMP280. It has not been flown yet; Part 8 is how you prove it.
 
 **How to use this guide:** work through the Parts in order. Each step ends with a **Check**; don't move on until it passes. In command blocks, a blank line separates commands, a line ending in `\` continues on the next line, and text after `#` is a comment.
 
@@ -14,18 +14,19 @@ This guide builds an indoor ArduCopter flight controller from a WEMOS D1 Mini ES
 
 |  | GY-91 build (`esp32lukas`) | This build (`esp32lukas6050`) |
 | --- | --- | --- |
-| IMU | MPU9250 on SPI (IO18/19/23, CS IO5) | Option A: **MPU6050**. Option B: **GY-91** (MPU9250). Both on I2C (SDA IO21, SCL IO22), address 0x68 |
+| IMU | MPU9250 on SPI (IO18/19/23, CS IO5) | Option A: **MPU6050**. Option B: **GY-91** (MPU9250). Both on I2C (SDA IO23, SCL IO22), address 0x68 |
 | Barometer | BMP280 inside the GY-91 (SPI, CS IO26) | Option B: the GY-91's BMP280 on the same I2C bus (0x76). Option A: none, or an add-on BMP280 module |
 | Compass | AK8963 inside the GY-91 | **None** on either option (`COMPASS_ENABLE 0`, `EK3_SRC1_YAW 0`); the GY-91's AK8963 stays unused. An external I2C compass is optional |
-| I2C pins | IO13/IO12 (unused, because the GY-91 ran on SPI) | **IO21/IO22**. IO12 is a boot pin and would stop the ESP32 booting with an I2C pull-up on it |
-| Motor outputs | IO25, 27, 33, 32 + IO22, 21 spare | IO25, 27, 33, 32 (IO21/22 now belong to I2C) |
+| I2C pins | IO13/IO12 (unused, because the GY-91 ran on SPI) | **IO23 (SDA) / IO22 (SCL)**. IO12 is a boot pin and would stop the ESP32 booting with an I2C pull-up on it |
+| Motor outputs | IO25, 27, 33, 32 + IO22, 21 spare | IO25, 27, 33, 32 (IO22/23 now belong to I2C) |
 | Everything else | MTF-01 on SERIAL3, PPM on IO4, WiFi, `SCHED_LOOP_RATE 150` | Same |
 
-**Fixes carried over from the GY-91 build** (all needed, all in Part 4):
+**Fixes** (all needed, all in Part 4; 1–3 carried over from the GY-91 build, 4 found on this one):
 
 1. **Optical flow is switched off for every ESP32 board** in ArduPilot's `esp32.h`. Without the fix, `FLOW_TYPE` doesn't exist.
 2. **Motors stuck at idle.** From ArduPilot 4.7 the motor library locks the motors at ground idle after arming, and on ESP32 nothing releases the lock: the drone arms but the outputs sit at 1150 and the throttle does nothing (upstream PR #34070 / #34132).
 3. **ESC calibration from Mission Planner hangs the ESP32** at every power-up. This guide never uses it: `ESC_CALIBRATION 9` plus a calibration sketch (Part 7).
+4. **The I2C IMU reader runs at the lowest priority.** ArduPilot's ESP32 code gives the I2C bus task priority 5, while the SPI bus gets 24. With the IMU on I2C, its reader keeps getting pushed back: parameters load slowly in Mission Planner and the HUD lags or freezes. Fix 4 raises it to 24.
 
 **Why swap the IMU at all?** On the GY-91 build the accelerometer jittered by about ±20 milli-g while sitting still, and the HUD rocked left and right. The same ArduPilot code on a Matek F405 sat still. Part 2 measures your MPU6050 (and your GY-91, with the same sketch) against the chip's datasheet, so you know whether the sensor or the setup is at fault before you fly. Option B keeps the GY-91 for its barometer, wired on I2C the way other flying ESP32 builds use it. I2C doesn't make a noisy chip quiet, so Part 2 still decides whether your GY-91 is good enough.
 
@@ -79,12 +80,12 @@ Both IMUs use the same four wires to the ESP32 and run the same firmware: ArduPi
 | MPU6050 pin | MINI32 pin | Notes |
 | --- | --- | --- |
 | VCC / GND | 5V / GND | The GY-521's own regulator makes 3.3V, and its pull-ups go to that 3.3V |
-| SDA | IO21 | I2C data |
+| SDA | IO23 | I2C data |
 | SCL | IO22 | I2C clock |
 | AD0 | GND (or unconnected) | Low = address 0x68 |
 | INT, XDA, XCL | not connected |  |
 
-An add-on BMP280 module for option A goes on the same bus: SDA / SCL to IO21 / IO22, VCC to 3V3 (unless the module has its own regulator), GND to GND, SDO to GND (address 0x76), CSB to 3V3 (I2C mode).
+An add-on BMP280 module for option A goes on the same bus: SDA / SCL to IO23 / IO22, VCC to 3V3 (unless the module has its own regulator), GND to GND, SDO to GND (address 0x76), CSB to 3V3 (I2C mode).
 
 **Option B: GY-91 (MPU9250 + BMP280)**
 
@@ -92,10 +93,12 @@ An add-on BMP280 module for option A goes on the same bus: SDA / SCL to IO21 / I
 | --- | --- | --- |
 | VIN / GND | 5V / GND | VIN feeds the GY-91's own 3.3V regulator |
 | 3V3 | not connected | The regulator's output: don't feed power into it |
-| SDA | IO21 | I2C data, shared by the MPU9250 and the BMP280 |
+| SDA | IO23 | I2C data, shared by the MPU9250 and the BMP280 |
 | SCL | IO22 | I2C clock |
-| SDO/SAO | GND (or unconnected) | Low = MPU9250 at 0x68 and BMP280 at 0x76. If the Part 2 scan shows 0x69 or 0x77, tie it to GND |
-| NCS, CSB | not connected | High = I2C mode, normally pulled up on the board. If the scan misses 0x68 or 0x76, tie both to the GY-91's 3V3 pin |
+| SDO/SAO | not connected (or GND) | Low = MPU9250 at 0x68 and BMP280 at 0x76. The tested GY-91 pulls it low on its own board (ArduPilot found the BMP280 at 0x76 with it unconnected). If the Part 2 scan shows 0x69 or 0x77, tie it to GND |
+| NCS, CSB | not connected | High = I2C mode, pulled up on the board. If the scan misses 0x68 or 0x76, tie both to the GY-91's 3V3 pin |
+
+**The I2C pins in your wiring and in `hwdef.dat` must be the same.** This build uses **IO23 (SDA) and IO22 (SCL)**, the tested wiring. Any free pins that aren't boot pins work (IO21 is another common choice), as long as the `ESP32_I2CBUS` line in 4.1 and the Part 2 sketch use the same ones. If they differ, ArduPilot never finds the IMU, startup never finishes, and Mission Planner gets no heartbeat even though the WiFi network shows up.
 
 The barometer measures air pressure, so keep moving air off it: cover the BMP280 (the small metal can with a pin-hole, next to the larger MPU9250 chip) with a piece of open-cell foam. Don't seal it airtight.
 
@@ -128,12 +131,12 @@ Options A and B use the same four IMU wires, so the drawing shows one IMU box. A
 
 This sketch scans the I2C bus, checks the chip ID ArduPilot needs, and measures how much the readings shake while the board sits still. Run it on the MPU6050, then on the GY-91 wired in I2C mode: the same test on both tells you whether the GY-91 itself was the problem.
 
-Arduino IDE, ESP32 board package, board **ESP32 Dev Module**, Serial Monitor at 115200. Put the board on a folded towel, away from the laptop, and don't touch it while it measures.
+Arduino IDE, ESP32 board package, board **ESP32 Dev Module**, Serial Monitor at 115200. Put the board on a folded towel, away from the laptop, and don't touch it while it measures. The sketch must use the same SDA/SCL pins as the \`ESP32\_I2CBUS\` line in 4.1: a sketch that finds the IMU on other pins proves nothing for ArduPilot.
 
 ```cpp
 // IMU check for ArduPilot on ESP32: I2C scan, chip ID, and a still-noise test.
 // Works for the MPU6050 (GY-521) and for the GY-91's MPU9250 wired in I2C mode.
-// Wiring: SDA = IO21, SCL = IO22. Board on a folded towel, don't touch it.
+// Wiring: SDA = IO23, SCL = IO22 (the same pins as ESP32_I2CBUS in hwdef.dat). Board on a towel, don't touch it.
 #include <Wire.h>
 
 const uint8_t ADDR = 0x68;          // AD0 / SDO low
@@ -159,7 +162,7 @@ bool readRegs(uint8_t reg, uint8_t *buf, uint8_t n) {
 void setup() {
   Serial.begin(115200);
   delay(1000);
-  Wire.begin(21, 22, 400000);                              // SDA, SCL, 400 kHz like ArduPilot
+  Wire.begin(23, 22, 400000);                              // SDA, SCL, 400 kHz like ArduPilot
 
   Serial.println("\n=== I2C scan ===");
   for (uint8_t a = 1; a < 127; a++) {
@@ -227,7 +230,7 @@ void loop() {
 
 |  | MPU6050 (GY-521) | GY-91 in I2C mode |
 | --- | --- | --- |
-| SDA / SCL | IO21 / IO22 | SDA / SCL to IO21 / IO22 |
+| SDA / SCL | IO23 / IO22 | SDA / SCL to IO23 / IO22 |
 | Power | VCC to 5V, GND | VIN to 5V (or 3V3), GND; leave its 3V3 pin unconnected |
 | Address pin | AD0 to GND | SDO/SAO to GND |
 | Mode pins | — | NCS and CSB unconnected (pulled high on the board = I2C mode). If the scan misses 0x68 or 0x76, tie both to the GY-91's 3V3 pin |
@@ -343,9 +346,9 @@ cat > libraries/AP_HAL_ESP32/hwdef/esp32lukas6050/hwdef.dat <<'EOF'
 # esp32lukas6050: WEMOS D1 Mini ESP32 (or DevKit) + MPU6050 (GY-521) or GY-91 on I2C, indoor MTF-01 build
 define HAL_ESP32_BOARD_NAME "esp32-lukas-6050"
 
-# --- I2C bus 0 on the standard ESP32 I2C pins (NOT IO12: it is a boot strapping pin)
+# --- I2C bus 0: SDA IO23, SCL IO22 = the tested wiring (any free pins work if the wiring matches; NOT IO12: boot strapping pin)
 #             Port       SDA         SCL          SPEED    INTERNAL SOFT
-ESP32_I2CBUS  I2C_NUM_0  GPIO_NUM_21 GPIO_NUM_22  400*KHZ  false    false
+ESP32_I2CBUS  I2C_NUM_0  GPIO_NUM_23 GPIO_NUM_22  400*KHZ  false    false
 
 # --- IMU: MPU6050, or the GY-91's MPU9250, at I2C address 0x68 (AD0/SAO low)
 define HAL_INS_DEFAULT HAL_INS_MPU60XX_I2C
@@ -515,7 +518,21 @@ grep -n "#if\|#else\|no ESC telemetry" ArduCopter/takeoff_check.cpp
 
 Nothing to build. `defaults.parm` sets `ESC_CALIBRATION 9`, and Part 7 calibrates the ESCs with a sketch. **Never press "Calibrate ESCs" in Mission Planner** on this board: it makes the ESP32 re-enter calibration at every power-up and stop talking to Mission Planner (recovery is in Troubleshooting).
 
-### 4.6 Check the parameter names
+### 4.6 Fix 4: let the I2C IMU reader run on time
+
+On ESP32, every bus has its own task with a priority (higher runs first). In `libraries/AP_HAL_ESP32/Scheduler.h` the SPI bus gets 24, the same as the main flight loop, but the I2C bus gets **5**: below the UART, timer, WiFi and motor tasks. The comment on that very line says an I2C IMU needs it higher. With the IMU on I2C, its reader keeps getting pushed back. The main loop waits for samples, and the driver throws samples away whenever more than 4 pile up inside the IMU (`AP_InertialSensor_Invensense.cpp`). On the bench this showed up as **slow parameter loading in Mission Planner and a laggy, frozen-looking HUD**. This sets the I2C bus to 24, the value the SPI IMU always ran at.
+
+```bash
+cd ~/ardupilot_esp32_build/ardupilot
+
+sed -i 's/I2C_PRIORITY = 5;/I2C_PRIORITY = 24;/' libraries/AP_HAL_ESP32/Scheduler.h
+
+grep -n "I2C_PRIORITY = 24" libraries/AP_HAL_ESP32/Scheduler.h
+```
+
+**Check:** the grep prints exactly one line (line 78 in the tested version), ending in `if your primary imu is i2c, this should be above the spi value...`. That comment is ArduPilot's own. Removing the SD-card driver was also tried for the same symptoms and did **not** help; this change did.
+
+### 4.7 Check the parameter names
 
 A misspelled name in `defaults.parm` is silently ignored, so check them against ArduCopter's parameter list:
 
@@ -554,7 +571,7 @@ get_idf                                       # load the ESP32 tools
 
 **Check:** it ends with `'copter' finished successfully` and an `ardupilot.bin binary size` line showing about 33% free. If `waf` stops at `esp-idf_showinc` with `constraints ... doesn't exist`, run `export IDF_PYTHON_CHECK_CONSTRAINTS=no`, delete `build/esp32lukas6050/esp-idf_build`, and build again.
 
-### 5.2 Confirm the IMU, flow, throttle fix and defaults are inside
+### 5.2 Confirm the IMU, flow, throttle fix, I2C priority and defaults are inside
 
 Do this before every flash that follows a board-file or source change.
 
@@ -568,6 +585,8 @@ nm -C build/esp32lukas6050/esp-idf_build/ardupilot.elf | grep -c AP_OpticalFlow_
 nm -C -S build/esp32lukas6050/esp-idf_build/ardupilot.elf | grep " Copter::takeoff_check()"   # size NOT 00000005
 
 grep -c "defaults.parm" build/esp32lukas6050/ap_romfs_embedded.h                      # 1: defaults embedded
+
+grep -c "I2C_PRIORITY = 24" libraries/AP_HAL_ESP32/Scheduler.h                     # 1: Fix 4 in
 ```
 
 **Check:**
@@ -578,6 +597,7 @@ grep -c "defaults.parm" build/esp32lukas6050/ap_romfs_embedded.h                
 | `AP_OpticalFlow_MAV` | A number above 0. A 0 means 4.3 didn't run: do it, configure and build again |
 | `Copter::takeoff_check()` | A size other than `00000005` (the test build showed `000000a4`). `00000005` is an empty function: do 4.4, then build again |
 | `defaults.parm` | `1` |
+| I2C\_PRIORITY = 24 | 1. A 0 means 4.6 didn't run: do it, then build again |
 
 ### 5.3 Flash
 
@@ -636,13 +656,15 @@ Press **RST** and watch the log. The first line `rst:0x1 (POWERON_RESET)` is nor
 
 **Check:** the log stops resetting, and after you connect Mission Planner (Part 6) the Messages tab shows no `INS: unable to initialise driver`. If you see that message, the IMU wasn't found at 0x68: rerun the Part 2 sketch.
 
+**The first boot after `erase_flash` is the slowest.** ArduPilot saves every parameter for the first time, and on ESP32 that waits until startup has finished. In the ESP32 emulator this first boot took about a minute; later boots are quick. Give it that minute without pressing RST or reopening the port, because a reset starts it over.
+
 ## Part 6: Mission Planner setup and calibration
 
 Props **off** for this whole Part. Reboot the board (press RST) after any group of parameter changes.
 
 ### 6.1 Connect
 
-- **USB (best for setup):** pick the board's COM port and **115200** (not AUTO). In **Config → Planner**, tick only **Reset on USB connect (DTR)**; untick it too if connecting is slow.
+- **USB (best for setup):** pick the board's COM port and **115200** (not AUTO). In **Config → Planner**, **untick Reset on USB connect (DTR)**: with it ticked, every connect restarts the ESP32, and it has to boot all over again before it can answer.
 - **WiFi (good for watching values during tests):** join your `WIFI_SSID` network, then connect with **TCP**, host **192.168.4.1**, port **5760**.
 
 **Check:** the HUD shows **DISARMED** and the Messages tab shows the IMU starting, with no `INS: unable to initialise driver`.
@@ -689,6 +711,15 @@ If it fails here but passed the Part 2 sketch, the problem is the mount or the w
 
 **Orientation check (both options).** With the frame level and the HUD level, tilt the nose down: the HUD should pitch nose down. Lift the left side: the HUD should roll right. If either is wrong or swapped, the IMU is turned on the frame. Set `AHRS_ORIENTATION` by where the board's forward (Y) arrow points: right = 2, backward = 4, left = 6. Reboot, check again, then redo Calibrate Accel and Calibrate Level (6.3).
 
+**Were the sensors found?** In **Config → Full Parameter List**:
+
+| Parameter | Good |
+| --- | --- |
+| `INS_ACC_ID`, `INS_GYR_ID` | Any non-zero number: the IMU was found |
+| `BARO1_DEVID` (option B) | Non-zero. The tested GY-91 shows **226817** = hex `0x037601`: BMP280 (type `03`), address `0x76`, I2C bus 0. 0 means no barometer: see 6.4b |
+
+**See the noise as a graph:** tick **Tuning** under the map, double-click the graph and pick `ax` and `ay`. A flat band about ±10 milli-g wide is good; spikes or a band ±20 or wider is the old GY-91 problem.
+
 ### 6.4b Option B: check the barometer
 
 Only for the GY-91 (or an add-on BMP280).
@@ -732,7 +763,7 @@ An inverted flow orientation makes ArduPilot push the drone harder in the direct
 
 With `EK3_SRC1_YAW 0` the heading comes from the gyro only, so the HUD heading **drifts slowly** and won't match a phone compass. That is expected. A constant or slowly drifting heading doesn't upset flow-based flying, because flow readings and motor commands are turned by the same amount.
 
-**Adding an external compass later** (QMC5883L or HMC5883L on IO21/IO22, mounted away from power wires): set `COMPASS_ENABLE 1` and `EK3_SRC1_YAW 1`, reboot, check it's detected, calibrate it in **Setup → Compass** away from steel, then check the HUD heading against a phone at N, E, S, W (within about 15°).
+**Adding an external compass later** (QMC5883L or HMC5883L on IO23/IO22, mounted away from power wires): set `COMPASS_ENABLE 1` and `EK3_SRC1_YAW 1`, reboot, check it's detected, calibrate it in **Setup → Compass** away from steel, then check the HUD heading against a phone at N, E, S, W (within about 15°).
 
 ## Part 7: ESC calibration
 
@@ -879,8 +910,10 @@ What the output numbers mean when you think it's armed:
 
 | Symptom | Cause | Fix |
 | --- | --- | --- |
-| Board won't boot, or boot-loops right after wiring the IMU | Something with a pull-up on IO12 (boot pin) | Move it to IO21/IO22 as in Part 1; keep IO12 free |
-| `INS: unable to initialise driver` | IMU not found at 0x68 | Run the Part 2 sketch: check the I2C scan shows 0x68 and `WHO_AM_I` is 0x68 (MPU6050) or 0x70 / 0x71 / 0x73 (GY-91); check SDA/SCL aren't swapped and AD0 is low |
+| Board won't boot, or boot-loops right after wiring the IMU | Something with a pull-up on IO12 (boot pin) | Move it to IO23/IO22 as in Part 1; keep IO12 free |
+| No MAVLink heartbeat in Mission Planner, but the WiFi network shows up; the boot log stops after the SD-card lines | Startup hasn't finished: on ESP32, MAVLink only starts once it does. Usually the IMU isn't found because the wired I2C pins differ from the hwdef, or it's the slow first boot after erase\_flash | Wire SDA/SCL to the pins in ESP32\_I2CBUS (1.3) and run the Part 2 sketch on those same pins; after a fresh flash wait a minute (5.4); untick Reset on USB connect (6.1) |
+| Parameters load slowly; the HUD lags or looks frozen | The I2C IMU reader runs at priority 5 and keeps getting pushed back | Do 4.6, check 5.2, build and flash. (Removing the SD-card driver doesn't fix this) |
+| `INS: unable to initialise driver` | IMU not found at 0x68 | Run the Part 2 sketch: check the I2C scan shows 0x68 and `WHO_AM_I` is 0x68 (MPU6050) or 0x70 / 0x71 / 0x73 (GY-91); check SDA/SCL go to the pins in ESP32\_I2CBUS (IO23/IO22), aren't swapped, and AD0 is low |
 | `WHO_AM_I` is not 0x68 / 0x70 / 0x71 / 0x73 | A clone ArduPilot's Invensense driver doesn't recognise | Use a different module |
 | GY-91: the scan shows 0x69 or 0x77 | SDO/SAO is floating high | Tie SDO/SAO to GND |
 | GY-91: the scan misses 0x68 or 0x76 | NCS or CSB isn't high, so that chip isn't in I2C mode | Tie NCS and CSB to the GY-91's 3V3 pin |
@@ -895,7 +928,7 @@ What the output numbers mean when you think it's armed:
 | Motor Test works but motors stutter or ignore higher % | ESC can't follow 400 Hz | `RC_SPEED 50`, then step up (Part 7) |
 | AltHold pumps up and down | Vibration, wrong hover throttle, or noisy rangefinder | `vibez` below about 15–20; hover longer so `MOT_THST_HOVER` learns; check `rangefinder1` |
 | Loiter leans hard or flips | Flow orientation inverted, or a bad attitude or heading estimate | Back to AltHold; redo the tilt test (6.5); fix `FLOW_ORIENT_YAW`; get a log before trying again |
-| `No MAVLink Heartbeat Packets` | Port held by another program, AUTO baud, or reset on connect | Close other serial programs; 115200 not AUTO; Config → Planner reset options (6.1) |
+| `No MAVLink Heartbeat Packets` | Port held by another program, AUTO baud, or reset on connect | Close other serial programs; 115200 not AUTO; untick Reset on USB connect (6.1) |
 | Board resets when throttle goes up (`rst:0xf`) | 5V brownout | Stronger 5V supply, capacitor across 5V and GND |
 | `waf` fails with `constraints ... doesn't exist` | ESP-IDF Python check | `export IDF_PYTHON_CHECK_CONSTRAINTS=no`, delete `build/esp32lukas6050/esp-idf_build`, build again |
 
@@ -934,6 +967,9 @@ What the output numbers mean when you think it's armed:
 - `libraries/AP_NavEKF3/AP_NavEKF3_PosVelFusion.cpp` (`selectHeightForFusion`): switches height to the barometer when the rangefinder has sent nothing for 500 ms
 - `libraries/AP_Baro/AP_Baro_BMP280.cpp`: accepts chip ID 0x58 (BMP280) and 0x60 (BME280)
 - `libraries/AP_Arming/AP_Arming.cpp` (`barometer_checks`): skipped on boards with `HAL_BARO_ALLOW_INIT_NO_BARO`
+- `libraries/AP_HAL_ESP32/Scheduler.h`: task priorities (`I2C_PRIORITY = 5`, `SPI_PRIORITY = 24`, `MAIN_PRIO = 24`) and ArduPilot's comment that an I2C IMU needs a higher I2C priority
+- `libraries/AP_InertialSensor/AP_InertialSensor_Invensense.cpp` (FIFO read): on I2C the driver resets the FIFO once more than 4 samples are waiting
+- `libraries/AP_HAL_ESP32/Scheduler.cpp` (`_uart_thread`, `_io_thread`, `_storage_thread`): these wait until startup has finished, which is why a stuck or slow startup shows no MAVLink
 
 **Datasheets**
 
