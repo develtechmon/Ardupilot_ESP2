@@ -16,7 +16,7 @@ This guide builds an indoor ArduCopter flight controller from a WEMOS D1 Mini ES
 | --- | --- | --- |
 | IMU | MPU9250 on SPI (IO18/19/23, CS IO5) | Option A: **MPU6050**. Option B: **GY-91** (MPU9250). Both on I2C (SDA IO23, SCL IO22), address 0x68 |
 | Barometer | BMP280 inside the GY-91 (SPI, CS IO26) | Option B: the GY-91's BMP280 on the same I2C bus (0x76). Option A: none, or an add-on BMP280 module |
-| Compass | AK8963 inside the GY-91 | **None** on either option (`COMPASS_ENABLE 0`, `EK3_SRC1_YAW 0`); the GY-91's AK8963 stays unused. An external I2C compass is optional |
+| Compass | AK8963 inside the GY-91 | **None** on either option (`COMPASS_ENABLE 0`, `EK3_SRC1_YAW 0`); the GY-91's AK8963 is off by default (6.7 turns it on). An external I2C compass is optional |
 | I2C pins | IO13/IO12 (unused, because the GY-91 ran on SPI) | **IO23 (SDA) / IO22 (SCL)**. IO12 is a boot pin and would stop the ESP32 booting with an I2C pull-up on it |
 | Motor outputs | IO25, 27, 33, 32 + IO22, 21 spare | IO25, 27, 33, 32 (IO22/23 now belong to I2C) |
 | Everything else | MTF-01 on SERIAL3, PPM on IO4, WiFi, `SCHED_LOOP_RATE 150` | Same |
@@ -359,7 +359,7 @@ define INS_MAX_INSTANCES 3
 BARO BMP280 I2C:0:0x76
 define HAL_BARO_ALLOW_INIT_NO_BARO 1
 
-# --- Compass: none used (the GY-91's AK8963 stays off); an external I2C compass on the same bus is found by probing
+# --- Compass: none used (the GY-91's AK8963 stays off unless you do 6.7); an external I2C compass on the same bus is found by probing
 define AP_COMPASS_PROBING_ENABLED 1
 
 # --- no airspeed sensor
@@ -763,7 +763,51 @@ An inverted flow orientation makes ArduPilot push the drone harder in the direct
 
 With `EK3_SRC1_YAW 0` the heading comes from the gyro only, so the HUD heading **drifts slowly** and won't match a phone compass. That is expected. A constant or slowly drifting heading doesn't upset flow-based flying, because flow readings and motor commands are turned by the same amount.
 
-**Adding an external compass later** (QMC5883L or HMC5883L on IO23/IO22, mounted away from power wires): set `COMPASS_ENABLE 1` and `EK3_SRC1_YAW 1`, reboot, check it's detected, calibrate it in **Setup → Compass** away from steel, then check the HUD heading against a phone at N, E, S, W (within about 15°).
+**Adding an external compass later** (QMC5883L or HMC5883L on IO23/IO22, mounted away from power wires): set `COMPASS_ENABLE 1` and `EK3_SRC1_YAW 1`, reboot, check it's detected, calibrate it in **Setup → Compass** away from steel, then check the HUD heading against a phone at N, E, S, W (within about 15°). On a GY-91 with a genuine MPU9250 you don't need an extra module: use its built-in compass instead (6.7).
+
+### 6.7 Option B: use the GY-91's own compass (optional)
+
+The MPU9250 on a genuine GY-91 has an AK8963 compass inside it. On I2C the compass sits **behind** the MPU9250, like a room behind a door. ArduPilot's IMU driver opens that door: it turns on the MPU9250's "I2C bypass" when the chip is on I2C (`AP_InertialSensor_Invensense.cpp`: "Enable I2C bypass to access internal device"). The compass then answers on the same SDA/SCL at address **0x0C**, with no extra wires.
+
+Use the `probe_mpu9250` form of the compass line. ArduPilot looks for compasses before it starts the IMU, so a plain `COMPASS AK8963 I2C:...` line would knock while the door is still shut. The `probe_mpu9250` form starts the IMU first, then looks (`AP_Compass_AK8963.cpp`).
+
+**First check the chip:** the Part 2 sketch's `WHO_AM_I` must be **0x71 or 0x73**. **0x70** is an MPU6500, which has no compass; skip this section.
+
+**1. Add the compass to `hwdef.dat`, rebuild and flash** (no `erase_flash`, your parameters stay):
+
+```bash
+cd ~/ardupilot_esp32_build/ardupilot
+
+F=libraries/AP_HAL_ESP32/hwdef/esp32lukas6050/hwdef.dat
+
+grep -q "AK8963:probe_mpu9250" $F || \
+  sed -i 's/^define AP_COMPASS_PROBING_ENABLED 1$/define AP_COMPASS_PROBING_ENABLED 1\nCOMPASS AK8963:probe_mpu9250 I2C:0:0x0C ROTATION_NONE\ndefine AP_COMPASS_AK8963_ENABLED 1/' $F
+
+grep -n "COMPASS" $F
+
+get_idf
+
+./waf configure --board=esp32lukas6050
+
+./waf copter
+
+grep -n "AK8963::probe_mpu9250" build/esp32lukas6050/hwdef.h
+
+ESPPORT=/dev/ttyUSB0 ESPBAUD=921600 ./waf copter --upload
+```
+
+**Check:** the first grep shows the two new lines under `define AP_COMPASS_PROBING_ENABLED 1`. The second shows `AP_Compass_AK8963::probe_mpu9250(GET_I2C_DEVICE(0,0x0c),ROTATION_NONE)`. `ROTATION_NONE` is right: the AK8963's axes differ from the gyro's, but ArduPilot's IMU axis mapping already lines them up when the IMU is at `ROTATION_NONE`, which is the same setting ArduPilot's own boards with this chip pair use.
+
+**2. Turn it on and check it.**
+
+| Step | How | Check |
+| --- | --- | --- |
+| Enable | `COMPASS_ENABLE 1`, `EK3_SRC1_YAW 1`, Write Params, reboot | `COMPASS_DEV_ID` is non-zero (compass found) |
+| Calibrate | **Setup → Compass → Start**, rotate the drone on every axis, away from steel (outdoors is best) | Calibration succeeds; no `Compass not calibrated` pre-arm message |
+| Heading | Compare the HUD heading with a phone at N, E, S, W | Within about 15° |
+| Motor interference | **Setup → Optional Hardware → Compass/Motor Calib**, props on, drone tied down firmly | Interference under about 30% |
+
+**Indoors, keep it only if it's steady.** The compass sits on the flight-controller board next to the ESC and battery wires, and indoor steel bends the field. If the heading wanders when the motors spin, or the Messages tab shows EKF yaw resets, set `COMPASS_ENABLE 0` and `EK3_SRC1_YAW 0` again: flow-based flight works without a compass (6.6). This change was test-built (it compiles and includes the AK8963 driver) but hasn't been tried on hardware yet.
 
 ## Part 7: ESC calibration
 
@@ -913,6 +957,7 @@ What the output numbers mean when you think it's armed:
 | Board won't boot, or boot-loops right after wiring the IMU | Something with a pull-up on IO12 (boot pin) | Move it to IO23/IO22 as in Part 1; keep IO12 free |
 | No MAVLink heartbeat in Mission Planner, but the WiFi network shows up; the boot log stops after the SD-card lines | Startup hasn't finished: on ESP32, MAVLink only starts once it does. Usually the IMU isn't found because the wired I2C pins differ from the hwdef, or it's the slow first boot after erase\_flash | Wire SDA/SCL to the pins in ESP32\_I2CBUS (1.3) and run the Part 2 sketch on those same pins; after a fresh flash wait a minute (5.4); untick Reset on USB connect (6.1) |
 | Parameters load slowly; the HUD lags or looks frozen | The I2C IMU reader runs at priority 5 and keeps getting pushed back | Do 4.6, check 5.2, build and flash. (Removing the SD-card driver doesn't fix this) |
+| GY-91 compass added (6.7) but COMPASS\_DEV\_ID stays 0 | The chip is an MPU6500 with no compass (WHO\_AM\_I 0x70), or the plain COMPASS AK8963 I2C line was used, so the compass was searched for before the I2C bypass was open | Check WHO\_AM\_I in Part 2 (needs 0x71 or 0x73); use the AK8963:probe\_mpu9250 line from 6.7, configure and build again |
 | `INS: unable to initialise driver` | IMU not found at 0x68 | Run the Part 2 sketch: check the I2C scan shows 0x68 and `WHO_AM_I` is 0x68 (MPU6050) or 0x70 / 0x71 / 0x73 (GY-91); check SDA/SCL go to the pins in ESP32\_I2CBUS (IO23/IO22), aren't swapped, and AD0 is low |
 | `WHO_AM_I` is not 0x68 / 0x70 / 0x71 / 0x73 | A clone ArduPilot's Invensense driver doesn't recognise | Use a different module |
 | GY-91: the scan shows 0x69 or 0x77 | SDO/SAO is floating high | Tie SDO/SAO to GND |
@@ -970,6 +1015,7 @@ What the output numbers mean when you think it's armed:
 - `libraries/AP_HAL_ESP32/Scheduler.h`: task priorities (`I2C_PRIORITY = 5`, `SPI_PRIORITY = 24`, `MAIN_PRIO = 24`) and ArduPilot's comment that an I2C IMU needs a higher I2C priority
 - `libraries/AP_InertialSensor/AP_InertialSensor_Invensense.cpp` (FIFO read): on I2C the driver resets the FIFO once more than 4 samples are waiting
 - `libraries/AP_HAL_ESP32/Scheduler.cpp` (`_uart_thread`, `_io_thread`, `_storage_thread`): these wait until startup has finished, which is why a stuck or slow startup shows no MAVLink
+- `libraries/AP_Compass/AP_Compass_AK8963.cpp` (`probe_mpu9250`): starts the IMU first ("Allow MPU9250 to shortcut auxiliary bus and host bus"), then probes the AK8963 at 0x0C; `AP_InertialSensor_Invensense.cpp` turns on the MPU9250's I2C bypass when it is on I2C
 
 **Datasheets**
 
