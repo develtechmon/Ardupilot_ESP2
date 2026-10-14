@@ -81,7 +81,7 @@ Both IMUs use the same four wires to the ESP32 and run the same firmware: ArduPi
 | --- | --- | --- |
 | VCC / GND | 5V / GND | The GY-521's own regulator makes 3.3V, and its pull-ups go to that 3.3V |
 | SDA | IO23 | I2C data |
-| SCL | IO22 | I2C clock |
+| SCL | IO18 | I2C clock |
 | AD0 | GND (or unconnected) | Low = address 0x68 |
 | INT, XDA, XCL | not connected |  |
 
