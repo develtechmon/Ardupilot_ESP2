@@ -703,7 +703,7 @@ In **Config → Full Parameter List**, set and **Write Params**, then reboot:
 
 | Parameter | Value | Why |
 | --- | --- | --- |
-| `MAV3_OPTIONS` | 2 | Don't forward MAVLink traffic to the MTF-01. MAV numbers count MAVLink ports in order: USB = MAV1, WiFi = MAV2, MTF-01 = MAV3. Appears after the first reboot |
+| `MAV4_OPTIONS` | 2 | Don't forward MAVLink to or from the MTF-01. MAV numbers count every SERIAL port set to a MAVLink protocol, in order: SERIAL0 (USB) = MAV1, SERIAL1 (WiFi) = MAV2, SERIAL2 = MAV3 (it has no pins on the WEMOS but still defaults to MAVLink2), SERIAL3 (MTF-01) = **MAV4**. **Check first that `MAV4_DEVID` = 66310**, ArduPilot's ID for SERIAL3 (confirmed on the tested drone). Leave `MAV3_OPTIONS` at 0. Appears after the first reboot |
 | `SERIAL3_OPTIONS` | 0 | Leave at 0: the old bit 10 (1024) blocks arming on 4.7+ firmware |
 | `FLOW_ORIENT_YAW` | 0 | Starting value; 6.7 tells you whether to change it |
 
@@ -977,7 +977,7 @@ What the output numbers mean when you think it's armed:
 | The scan shows 0x69 or 0x77 | SDO/SAO is floating high | Tie SDO/SAO to GND |
 | The scan misses 0x68 or 0x76 | NCS or CSB isn't high, so that chip isn't in I2C mode | Tie NCS and CSB to the GY-91's 3V3 pin |
 | Board won't boot, or boot-loops right after wiring the GY-91 | Something with a pull-up on IO12 (boot pin) | Move it to other pins; keep IO12 free |
-| `PreArm: Rangefinder 1: No Data`; ground speed and height wander while still | The EKF has lost the MTF-01 | Check MTF-01 wiring (TX → IO16, RX → IO17), MicoAssistant settings, `SERIAL3_PROTOCOL 1`, `SERIAL3_BAUD 115`, `MAV3_OPTIONS 2` |
+| `PreArm: Rangefinder 1: No Data`; ground speed and height wander while still | The EKF has lost the MTF-01 | Check MTF-01 wiring (TX → IO16, RX → IO17), MicoAssistant settings, `SERIAL3_PROTOCOL 1`, `SERIAL3_BAUD 115`, `MAV4_OPTIONS 2` |
 | `FLOW_TYPE` missing from the parameter list | Flow compiled out | Do Fix 1 (4.3), configure and build again, check 5.2 |
 | Armed, throttle does nothing; `ch1out`–`ch4out` stay at 1150 | Motors-stuck-at-idle bug | Do Fix 2 (4.4), rebuild, check the `takeoff_check` size (5.2), flash |
 | `ch1out`–`ch4out` stay at 1000 while you think it's armed | Not armed | HUD must say ARMED; flip CH6 down then up; `ch6in` must pass 1200 and 1800 |
