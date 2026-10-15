@@ -730,6 +730,16 @@ In **Config → Full Parameter List**, set these and **Write Params**, then rebo
 
 The rest comes from `defaults.parm`. Confirm `SCHED_LOOP_RATE` = 150 and `FLOW_TYPE` = 5; if they aren't, the flash wasn't erased on a new board (5.4).
 
+In **Initial Tune Parameter **, set these and **Calculate Initial Parameters**:
+
+| Parameter | Value | Why |
+| --- | --- | --- |
+| `Airscrew size in inch` | 8 | Set the propeller size and inch based on 8051 type |
+| `Battery cell count` | 3 | 3s battery |
+| `Battery cell fully charged voltage` | 4.2 | Battery Max |
+| `Battery cell fully discharged voltag` | 3.3 | Battery Min |
+
+
 ### 6.3 Were all three sensors found?
 
 In **Config → Full Parameter List**, after the reboot:
