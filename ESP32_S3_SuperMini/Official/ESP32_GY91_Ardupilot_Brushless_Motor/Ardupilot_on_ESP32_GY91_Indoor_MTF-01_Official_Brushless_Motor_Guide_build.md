@@ -4,7 +4,7 @@ Oct 15, 2026 · @lukas
 
 ## At a glance
 
-This guide builds the same indoor ArduCopter drone as your **flying WEMOS** (GY-91, MTF-01, FS-A8S, four plain-PWM ESCs) on an **ESP32-S3 Super Mini**, with a **USB-TTL adapter** on the S3's TX/RX pins for both flashing and Mission Planner. The `defaults.parm` is your WEMOS file with **one value changed and one line added**; the `hwdef.dat` differs only where the Super Mini's pins force it.
+This guide builds the same indoor ArduCopter drone as your **flying WEMOS** (GY-91, MTF-01, FS-A8S, four plain-PWM ESCs) on an **ESP32-S3 Super Mini**, with a **USB-TTL adapter** on the S3's TX/RX pins for both flashing and Mission Planner. The `defaults.parm` is your WEMOS file with **one line added**; the `hwdef.dat` differs only where the Super Mini's pins force it.
 
 > **Status and safety.** ArduPilot on ESP32 is experimental, and this S3 build has not flown yet. Keep props **off** until Part 8, fly tethered first, and never near people.
 
@@ -18,7 +18,6 @@ This guide builds the same indoor ArduCopter drone as your **flying WEMOS** (GY-
 
 | What | WEMOS (`esp32lukas6050`) | S3 Super Mini (`esp32s3lukas`) | Why |
 | --- | --- | --- | --- |
-| `EK3_SRC1_YAW` (the only value changed in `defaults.parm`) | 1 (compass heading) | **0** (no heading sensor) | The GY-91 tested on this S3 has a dead compass. With a good module, set it back to 1 (8.4) |
 | `MAV1_PARAMS` (the one line added to `defaults.parm`) | Not set (0) | **20** | Faster first parameter download over the USB-TTL after power-up (6.1) |
 | Pins | I2C 23/18, motors 25/27/33/32, PPM 4, MTF-01 16/17 | I2C **12/13**, motors **4/5/6/7**, PPM **8**, MTF-01 **9/10** | The Super Mini only has GPIO1–13 and 43/44 on its header |
 | Mission Planner and flashing | USB chip on the board | **USB-TTL adapter** on TX/RX (GPIO43/44), 115200 | The Super Mini has no USB-serial chip |
@@ -26,7 +25,6 @@ This guide builds the same indoor ArduCopter drone as your **flying WEMOS** (GY-
 | Flash size setting | 4 MB (classic ESP32 default) | 4 MB via Fix 6 | ArduPilot's S3 default is 8 MB |
 | SD card | Driver on (errors harmless) | Driver and file system off | The SD driver would claim GPIO2 on the S3 |
 | WiFi | TCP 192.168.4.1:5760, `lukas-drone` | TCP 192.168.4.1:5760, `lukas-drone-s3` | Same mode; a different name so the two drones can't be mixed up |
-| `COMPASS_ENABLE` | 1, set in Mission Planner | Stays 0 (dead compass) | 8.4 turns it on with a good module |
 | `MAV4_OPTIONS 2` | Set in Mission Planner | Set in Mission Planner (6.2) | Same as the WEMOS |
 
 **The fixes** (all in Part 4):
@@ -89,7 +87,7 @@ Arrows show which way a signal travels; SDA and SCL carry data both ways. Every 
 - **One power source at a time.** On the bench, power the Super Mini from its USB-C port (a PC port or a phone charger; it now carries only power) with the BEC's red wire unplugged. On the drone, the BEC powers it and USB-C stays out. Never connect the adapter's VCC pin.
 - **Keep the boot and USB pins free.** GPIO0 is the BOOT button, GPIO3 is sampled at reset, GPIO19/GPIO20 are the USB lines (not on the header), and GPIO48 drives the on-board LED.
 - **Keep the GY-91 wires short** (under about 10 cm) and away from the ESC and battery wires.
-- **Keep current-carrying wires away from the GY-91**, so a compass works if you fit a good module later.
+- **Keep current-carrying wires away from the GY-91**: the compass is on that board, and battery and ESC power leads close to it pull the heading as the motors draw current.
 - **Cover the BMP280** (the small metal can with a pin-hole) with open-cell foam. Don't seal it airtight.
 - **Mount the GY-91 chip side up, its Y axis forward, X axis right** (`ROTATION_NONE`), flat, near the centre of the frame, on firm foam. 6.5 confirms it.
 - **Mount the MTF-01** underneath, lens straight down, with a clear view of the floor.
@@ -373,15 +371,15 @@ void loop() {
 
 **A good GY-91 prints:** `0x68` and `0x76` in the first scan; `WHO_AM_I = 0x71` (0x73 for an MPU9255); `INT_PIN_CFG = 0x02`; `0x0C` as well in the second scan; `Compass OK`; then `ACC noise GOOD   GYRO noise GOOD`.
 
-**The GY-91 tested on this Super Mini** read `WHO_AM_I = 0x71`, `reads OK 500/500`, accelerometer noise 1.1–1.7 mg and gyro noise 0.07–0.09 °/s (both GOOD), but its compass did not answer. That is why this guide sets `EK3_SRC1_YAW 0`.
+The first GY-91 tested on this Super Mini read `WHO_AM_I` = 0x71 with quiet readings, but its compass did not answer. It has been replaced: the new module's compass and other sensors work, so this guide uses the compass exactly like your WEMOS. Run this check on any replacement module before you build.
 
 | Result | Meaning |
 | --- | --- |
 | Serial Monitor shows nothing | **USB CDC On Boot** is Enabled (output goes to USB-C), wrong COM port, or RST not pressed after upload |
 | Garbled text | Serial Monitor not at 115200 |
-| `WHO_AM_I` is 0x70 | An MPU6500: no compass inside. Fine with `EK3_SRC1_YAW 0` |
+| `WHO_AM_I` is 0x70 | An MPU6500: no compass inside. Use a GY-91 with a genuine MPU9250 |
 | `WHO_AM_I` not 0x70 / 0x71 / 0x73 | ArduPilot won't detect this chip. Use another module |
-| `Bypass is ON but nothing answers at 0x0C` | This module's compass is dead or missing. Fine with `EK3_SRC1_YAW 0`; for a compass use another GY-91 |
+| `Bypass is ON but nothing answers at 0x0C` | This module's compass is dead or missing: use another GY-91 |
 | Reads fail, or 0x68 / 0x76 missing from the scan | Wiring, pins that don't match the sketch, or the SDO/SAO pin (1.2) |
 | BAD noise on the towel | The chip itself is noisy: replace the GY-91 |
 
@@ -565,7 +563,7 @@ EOF
 
 ### 4.2 Create `defaults.parm`
 
-This is **your WEMOS `defaults.parm`** with three lines changed: the first comment names this board, the MTF-01 comment gives the S3 pins, and **`EK3_SRC1_YAW 0`** replaces 1 because this GY-91's compass is dead. With a good GY-91, change it back to 1 (8.4).
+This is **your WEMOS `defaults.parm`** with two comments changed: the first names this board, and the MTF-01 comment gives the S3 pins. Every value is the same, including `EK3_SRC1_YAW 1` (heading from the compass).
 
 **One line added at the end:** `MAV1_PARAMS 20`. It makes the first parameter download over the USB-TTL faster after power-up (6.1). MAV1 is SERIAL0, the USB-TTL port. If you already set it to 20 in Mission Planner, nothing changes; after an `erase_flash` it comes back from this file.
 
@@ -627,7 +625,7 @@ EK3_SRC1_POSXY 0
 EK3_SRC1_VELXY 5
 EK3_SRC1_POSZ 2
 EK3_SRC1_VELZ 0
-EK3_SRC1_YAW 0
+EK3_SRC1_YAW 1
 
 # --- faster first parameter download over the USB-TTL (SERIAL0 = MAV1)
 MAV1_PARAMS 20
@@ -635,6 +633,8 @@ EOF
 ```
 
 **Comments older than the build.** As in the WEMOS file, they are left as they are: with Fix 4, Mission Planner's **Calibrate ESCs** works too (Part 7), and the SD-card comment names the WEMOS board.
+
+**The compass comments** say no compass is used, also as in the WEMOS file. The `COMPASS AK8963:probe_mpu9250` line in `hwdef.dat` is what lets the GY-91's compass work; you switch it on with `COMPASS_ENABLE 1` in 6.2. The EKF3 comment says "no yaw source", but the value is `EK3_SRC1_YAW 1`, compass heading, which is what the WEMOS flies with.
 
 ### 4.3 Fix 1: turn optical flow back on
 
@@ -920,8 +920,9 @@ In **Config → Full Parameter List**, set these and **Write Params**, then rebo
 | `MAV4_OPTIONS` | 2 | Don't forward MAVLink to or from the MTF-01. **First check `MAV4_DEVID` = 66310** (SERIAL3), as on the WEMOS. The numbering is the same: SERIAL0 (USB-TTL) = MAV1, SERIAL1 (WiFi) = MAV2, SERIAL2 = MAV3 (no pins, but MAVLink by default), SERIAL3 (MTF-01) = MAV4. Leave `MAV3_OPTIONS` at 0 |
 | `SERIAL3_OPTIONS` | 0 | Leave at 0: the old bit 1024 for "don't forward" blocks arming on 4.7+ firmware |
 | `FLOW_ORIENT_YAW` | 0 | Starting value; 6.8 tells you whether to change it |
+| `COMPASS_ENABLE` | 1 | Turns on the GY-91's AK8963 compass, as on the WEMOS. `EK3_SRC1_YAW` is already 1 (heading from the compass) |
 
-Leave `COMPASS_ENABLE` at 0 and `EK3_SRC1_YAW` at 0 while this GY-91's compass is dead (8.4 covers a good module). Confirm `SCHED_LOOP_RATE` = 150, `FLOW_TYPE` = 5, `ESC_CALIBRATION` = 9 and MAV1\_PARAMS = 20; if they aren't, the flash wasn't erased (5.3).
+Confirm `SCHED_LOOP_RATE` = 150, `FLOW_TYPE` = 5, `ESC_CALIBRATION` = 9, `EK3_SRC1_YAW` = 1 and `MAV1_PARAMS` = 20; if they aren't, the flash wasn't erased (5.3).
 
 ### 6.3 Were the sensors found?
 
@@ -929,12 +930,13 @@ Leave `COMPASS_ENABLE` at 0 and `EK3_SRC1_YAW` at 0 while this GY-91's compass i
 | --- | --- |
 | `INS_ACC_ID`, `INS_GYR_ID` | Any non-zero number: the IMU was found |
 | `BARO1_DEVID` | **226817**: BMP280, address 0x76, I2C bus 0, the same number as on the WEMOS. 0 means no barometer |
+| `COMPASS_DEV_ID` | **265217** = hex 0x040C01: AK8963, address 0x0C, I2C bus 0, the same number as on the WEMOS. 0 means no compass: check `COMPASS_ENABLE` = 1 and the Part 2 compass result |
 
 The Messages tab after boot should also show `Barometer 1 calibration complete`.
 
 ### 6.4 Accelerometer and level
 
-Always **power up with the drone sitting still**. Without a compass this matters even more: the gyro alone holds the heading.
+Always **power up with the drone sitting still**: ArduPilot measures the gyro's zero point in the first seconds.
 
 In **Setup → Mandatory Hardware → Accel Calibration**: **Calibrate Accel** (six positions), then **Calibrate Level**. **Check:** the HUD is level when the frame is level, and there is no `DCM Roll/Pitch inconsistent` message.
 
@@ -949,7 +951,7 @@ In **Setup → Mandatory Hardware → Accel Calibration**: **Calibrate Accel** (
 | HUD roll / pitch | Steady within about ±1° |
 | `ax`, `ay` | Near 0, within about ±10 milli-g |
 | `az` | Near −1000 (1 g) |
-| HUD heading | Creeps by no more than a few degrees (gyro-only heading) |
+| HUD heading | Steady, no slow creep (the compass holds it) |
 
 ### 6.6 Barometer check
 
@@ -996,6 +998,15 @@ The WiFi code is ArduPilot's stock code, the same as on the WEMOS. Use the USB-T
 4. **Steady the power:** a 470 µF capacitor across 5V and GND near the board.
 
 Change one thing at a time, so you know which one helped.
+
+### 6.10 Compass calibration and heading check
+
+1. **Setup → Mandatory Hardware → Compass.** The list should show the AK8963 (the `COMPASS_DEV_ID` from 6.3) with **Use Compass 1** ticked.
+2. Take the drone **away from steel, metal-framed desks and the laptop**, click **Start** under Onboard Mag Calibration, and rotate the drone slowly through every axis until the bar completes.
+3. When it reports success, **reboot**.
+4. **Heading check:** compare the HUD heading with a phone compass, nose pointing N, E, S and W. **Check:** within about 15° at each.
+
+If calibration keeps failing or the heading is off by 90° or 180°, recheck the orientation (6.5) first. Motor interference is measured with props on in 8.2.
 
 ## Part 7: ESC calibration
 
@@ -1145,6 +1156,7 @@ Work through every item; fix any failure before moving on.
 - Each prop matches its motor's spin direction, printed side up.
 - **Tether** the drone for the first throttle-ups, with your finger on the CH6 disarm switch.
 - Fly over a **textured floor** in good light, between about 0.3 and 2 m.
+- **Compass/motor check:** with the drone tied down, run Setup → Optional Hardware → Compass/Motor Calib, raise the throttle slowly to about 50–75% and back, then finish. **Check:** interference under about 30%. Above that, move the battery and ESC power leads away from the GY-91 and repeat.
 
 ### 8.3 Fly in stages
 
@@ -1154,19 +1166,9 @@ Work through every item; fix any failure before moving on.
 | 2 | **AltHold**, throttle stick at **mid** | Holds height with the stick centred | If it pumps up and down, check `vibez` and `rangefinder1` |
 | 3 | **Loiter** or **PosHold** | Holds position hands-off | Only after 6.8 passed |
 
-**Stage 3 procedure:** set `FLTMODE6 5` (Loiter) or `16` (PosHold), reboot, take off in **AltHold** to about 1 m, then switch with your finger on the mode switch. If it leans or accelerates, switch straight back to AltHold and land. Without a compass, a slow turn of the nose over a minute or two is the gyro-only heading drifting.
+**Stage 3 procedure:** set `FLTMODE6 5` (Loiter) or `16` (PosHold), reboot, take off in **AltHold** to about 1 m, then switch with your finger on the mode switch. If it leans, accelerates or slowly turns its nose, switch straight back to AltHold and land: a wandering heading points to the compass (6.10, and the motor check in 8.2).
 
 **Logs:** `LOG_BACKEND_TYPE 0` means nothing is recorded. This board has no SD card; to log, use MAVLink (`LOG_BACKEND_TYPE 2`, needs a log receiver connected).
-
-### 8.4 With a good GY-91: turn the compass on
-
-Only with a module whose Part 2 RESULT says **Compass OK**. This puts the S3 on exactly your WEMOS settings.
-
-1. In **Config → Full Parameter List**: `COMPASS_ENABLE` = **1**, `EK3_SRC1_YAW` = **1**. **Write Params**, reboot.
-2. **Check:** `COMPASS_DEV_ID` = **265217** (AK8963, address 0x0C, I2C bus 0).
-3. **Compass calibration:** away from steel and the laptop, **Setup → Mandatory Hardware → Compass → Start**, rotate the drone through every axis until it completes, reboot. Over WiFi is easiest, so no cable gets in the way.
-4. **Heading check:** HUD heading within about 15° of a phone compass at N, E, S and W.
-5. **Motor interference (props on, tethered):** **Setup → Optional Hardware → Compass/Motor Calib**, throttle slowly to 50–75% and back. **Check:** under about 30%.
 
 ## Troubleshooting
 
@@ -1199,7 +1201,10 @@ Find your symptom, do the fix, test again. One change at a time, otherwise you w
 | ESC calibration repeats at every power-up; Mission Planner never connects | `ESC_CALIBRATION` flag stuck in flash (firmware without Fix 4) | Erase only the parameter area (command below), flash firmware with Fix 4, redo Part 6 |
 | Board resets when the motors spin up | Brownout on the 5 V rail | Power the S3 from a proper 5 V BEC; common ground between ESCs, BEC and board; short, thick power wires; 470 µF across 5V and GND |
 | WiFi connects, then drops | Weak signal, power, or the laptop switching networks | The 6.9 checklist; use the USB-TTL for setup |
-| Nose slowly turns in AltHold / PosHold | No compass on this build (`EK3_SRC1_YAW 0`): yaw comes from the gyro only | Expected with the dead GY-91 compass; fix it with a good module (8.4) |
+| `COMPASS_DEV_ID` is 0 | `COMPASS_ENABLE` is 0, the chip is an MPU6500 (no compass), or the module's compass is dead | Set `COMPASS_ENABLE` 1 (6.2); Part 2: WHO\_AM\_I 0x71/0x73 and the compass must answer at 0x0C |
+| `PreArm: Compass not calibrated` | Compass calibration not done or not saved | Do 6.10 and reboot |
+| Heading off by 90° or 180°, or compass calibration keeps failing | GY-91 turned on the frame, or steel nearby | Orientation check (6.5); calibrate away from steel |
+| Heading wanders when the motors spin; Loiter/PosHold slowly turns or drifts | Motor current near the compass | Compass/motor check (8.2); move the power leads away from the GY-91 |
 | Loiter leans hard or flips | Flow orientation inverted | Back to AltHold; redo the tilt test (6.8); fix `FLOW_ORIENT_YAW` |
 | `waf` fails with `constraints ... doesn't exist` | ESP-IDF Python check | Commands below, then build again |
 
