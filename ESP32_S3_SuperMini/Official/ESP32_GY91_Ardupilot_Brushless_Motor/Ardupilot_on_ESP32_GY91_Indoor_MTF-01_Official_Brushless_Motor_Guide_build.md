@@ -907,7 +907,7 @@ Props **off** for this whole Part. Reboot the board (press RST) after any group 
 ### 6.1 Connect
 
 - **USB-TTL (best for setup):** pick the adapter's COM port (**USB-SERIAL CH340**, **Silicon Labs CP210x** or similar) at **115200** (not AUTO) and click **Connect**. In **Config → Planner**, **untick Reset on USB connect (DTR)**, as on the WEMOS.
-- **WiFi (good for watching values during tests):** join the `lukas-drone-s3` network, then connect with **TCP**, host **192.168.4.1**, port **5760**, the same as the WEMOS.
+- **WiFi (works well on this build; handy for calibration and tests):** join the `lukas-drone-s3` network, then connect with **TCP**, host **192.168.4.1**, port **5760**, the same as the WEMOS.
 
 **Check:** the HUD shows **DISARMED**, and the parameter list downloads. The first download after power-up is the slow one; with MAV1\_PARAMS 20 (4.2) it is clearly quicker than the minute it took without it. Reconnecting while the board stays powered is near instant.
 
@@ -990,7 +990,7 @@ Don't fly Loiter or PosHold until this passes. **Move test:** right-click the ma
 
 ### 6.9 WiFi link check
 
-The WiFi code is ArduPilot's stock code, the same as on the WEMOS. Use the USB-TTL for setup; WiFi is for watching values during tests. With Mission Planner on WiFi (TCP) from about 3 m away, it should stay connected for 5 minutes. If it drops:
+The WiFi code is ArduPilot's stock code, the same as on the WEMOS. On this build it connects and stays connected well. Check it once with the motors spinning (props off), where power dips and ESC noise show up first: with Mission Planner on WiFi (TCP) from about 3 m away, it should stay connected for 5 minutes. If it drops:
 
 1. **Stop Windows switching networks:** the drone's network has no internet, so untick **Connect automatically** on your other saved WiFi networks while flying.
 2. **Turn off the laptop's WiFi power saving:** Device Manager → your WiFi adapter → Power Management → untick Allow the computer to turn off this device.
@@ -1002,7 +1002,7 @@ Change one thing at a time, so you know which one helped.
 ### 6.10 Compass calibration and heading check
 
 1. **Setup → Mandatory Hardware → Compass.** The list should show the AK8963 (the `COMPASS_DEV_ID` from 6.3) with **Use Compass 1** ticked.
-2. Take the drone **away from steel, metal-framed desks and the laptop**, click **Start** under Onboard Mag Calibration, and rotate the drone slowly through every axis until the bar completes.
+2. Take the drone **away from steel, metal-framed desks and the laptop**, click **Start** under Onboard Mag Calibration, and rotate the drone slowly through every axis until the bar completes. Over WiFi is easiest, so no cable gets in the way.
 3. When it reports success, **reboot**.
 4. **Heading check:** compare the HUD heading with a phone compass, nose pointing N, E, S and W. **Check:** within about 15° at each.
 
@@ -1200,7 +1200,7 @@ Find your symptom, do the fix, test again. One change at a time, otherwise you w
 | Outputs sit at 1000 | Not armed | Flip CH6 down then up; read the PreArm message |
 | ESC calibration repeats at every power-up; Mission Planner never connects | `ESC_CALIBRATION` flag stuck in flash (firmware without Fix 4) | Erase only the parameter area (command below), flash firmware with Fix 4, redo Part 6 |
 | Board resets when the motors spin up | Brownout on the 5 V rail | Power the S3 from a proper 5 V BEC; common ground between ESCs, BEC and board; short, thick power wires; 470 µF across 5V and GND |
-| WiFi connects, then drops | Weak signal, power, or the laptop switching networks | The 6.9 checklist; use the USB-TTL for setup |
+| WiFi connects, then drops | Weak signal, power, or the laptop switching networks | The 6.9 checklist; the USB-TTL still works meanwhile |
 | `COMPASS_DEV_ID` is 0 | `COMPASS_ENABLE` is 0, the chip is an MPU6500 (no compass), or the module's compass is dead | Set `COMPASS_ENABLE` 1 (6.2); Part 2: WHO\_AM\_I 0x71/0x73 and the compass must answer at 0x0C |
 | `PreArm: Compass not calibrated` | Compass calibration not done or not saved | Do 6.10 and reboot |
 | Heading off by 90° or 180°, or compass calibration keeps failing | GY-91 turned on the frame, or steel nearby | Orientation check (6.5); calibrate away from steel |
