@@ -1,6 +1,6 @@
 # ArduPilot on WEMOS D1 Mini ESP32 + GY-91 — Indoor MTF-01 Build Guide (as flown)
 
-Oct 14, 2026 · @lukas
+Oct 14, 2026 · Dr. Lukas
 
 ## At a glance
 
