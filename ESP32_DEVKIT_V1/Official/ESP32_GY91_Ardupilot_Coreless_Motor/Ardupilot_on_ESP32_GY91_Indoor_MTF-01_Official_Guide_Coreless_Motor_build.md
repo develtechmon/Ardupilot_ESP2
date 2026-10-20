@@ -1,6 +1,6 @@
 # ArduPilot on ESP32 DevKit — Coreless 1S Indoor MTF-01 Build Guide
 
-Oct 15, 2026 · @lukas
+Oct 15, 2026 · Dr. Lukas
 
 ## At a glance
 
