@@ -104,7 +104,7 @@ Arrows show which way a signal travels; SDA and SCL carry data both ways and are
 
 **Buzzer circuit**
 
-&#91;embedded content: Buzzer circuit · IO19, 1 kΩ, NPN transistor, active buzzer on 5V\]
+![Wiring schematic](wemos_gps_buzzer_circuit.png)
 
 When IO19 goes high, the transistor connects the buzzer's − side to GND and it beeps; the buzzer's current comes from the 5V rail, not from the ESP32 pin. S8050 and 2N2222 have different pin orders, so check E, B and C on your transistor's datasheet.
 
