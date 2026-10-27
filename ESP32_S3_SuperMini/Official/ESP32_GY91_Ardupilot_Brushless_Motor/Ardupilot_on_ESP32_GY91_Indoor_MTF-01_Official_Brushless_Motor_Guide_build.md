@@ -77,8 +77,7 @@ The Super Mini's header has 15 usable pins: **GPIO1–GPIO13, TX (GPIO43) and RX
 
 **Wiring schematic**
 
-&#91;embedded content: Wiring schematic · Super Mini, USB-TTL, GY-91, MTF-01, receiver, 4 ESCs, power\]
-
+![Wiring schematic](s3_wiring_schematic.png)
 Arrows show which way a signal travels; SDA and SCL carry data both ways. Every device's GND, the adapter's included, must join the same ground as the Super Mini.
 
 ### 1.3 Wiring rules

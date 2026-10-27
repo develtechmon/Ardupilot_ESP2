@@ -1,6 +1,6 @@
 # ArduPilot on WEMOS D1 Mini ESP32 + GY-91 — Indoor MTF-01 Build Guide (as flown)
 
-Oct 14, 2026 · @lukas
+Oct 14, 2026 · Dr. Lukas
 
 ## At a glance
 
@@ -72,7 +72,7 @@ The GY-91 needs only four wires (VIN, GND, SDA, SCL): its board pulls the addres
 
 **Wiring schematic**
 
-&#91;embedded content: Wiring schematic · GY-91, MTF-01, receiver, 4 ESCs, power\]
+![Wiring schematic](wemos_wiring_schematic.png)
 
 Arrows show which way a signal travels; SDA and SCL carry data both ways. Every device's GND must join the same ground as the ESP32, or the signals have no reference.
 

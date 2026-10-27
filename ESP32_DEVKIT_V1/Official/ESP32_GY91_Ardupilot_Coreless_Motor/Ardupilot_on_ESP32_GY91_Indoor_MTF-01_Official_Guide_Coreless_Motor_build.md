@@ -1,6 +1,6 @@
 # ArduPilot on ESP32 DevKit — Coreless 1S Indoor MTF-01 Build Guide
 
-Oct 15, 2026 · @lukas
+Oct 15, 2026 · Dr. Lukas
 
 ## At a glance
 
@@ -84,13 +84,13 @@ The DevKit's silkscreen names some pins differently: D23 = IO23, RX2 = IO16, TX2
 
 **Wiring schematic**
 
-&#91;embedded content: Wiring schematic · GY-91, MTF-01, receiver, 4 MOSFET motor channels, 1S power and the 5V boost\]
+![Wiring schematic](coreless_wiring_schematic.png)
 
 Arrows show which way a signal or power travels; SDA and SCL carry data both ways. Every device's GND must join the battery's −, or the signals have no reference.
 
 **One motor channel** (build it four times)
 
-&#91;embedded content: One motor channel · gate resistor, pull-down, MOSFET, motor and diode\]
+![One motor channel](coreless_motor_channel.png)
 
 The MOSFET switches the motor's ground side: the motor's + wire always sits on battery +, and the MOSFET connects its − wire to GND when the ESP32 pin is high. The 100 Ω resistor limits the pin current when the gate switches. The 10 kΩ pull-down holds the gate low while the ESP32 boots and its pins float, so no motor starts by itself. The diode catches the voltage spike the motor makes each time it switches off; without it, MOSFETs die.
 
